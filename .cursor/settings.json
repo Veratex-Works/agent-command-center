@@ -1,0 +1,8 @@
+{
+    "plugins": {
+      "supabase": {
+        "enabled": true
+      }
+    }
+  }
+  

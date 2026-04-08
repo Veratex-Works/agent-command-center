@@ -1,0 +1,300 @@
+---
+description: eact Architecture & Components — Inspired by Alex Kondov's "Tao of React" + modern React ecosystem (2024)
+globs:
+applyIntelligently: true
+---
+
+## TECH STACK (Non-Negotiable Defaults)
+
+- **UI Components**: shadcn/ui — always prefer shadcn primitives before building custom ones
+- **Styling**: Tailwind CSS utility classes only — no inline styles, no CSS modules
+- **Routing**: React Router v6+ — use `createBrowserRouter` with nested routes and loaders
+- **Data Fetching**: React Query (TanStack Query) — never use raw `useEffect` or plain `fetch` directly in components
+- **API Types**: Orval — when a custom backend is present, always generate types and React Query hooks from the OpenAPI/Swagger spec. Never hand-write API types that can be generated
+- **Global State**: Zustand — only for client-side UI state not covered by React Query
+- **Forms**: React Hook Form + Zod — always validate schemas with Zod, never manual validation
+- **Backend**: Project-dependent — Supabase, or a custom REST API built in Node.js (Express, Fastify, NestJS) or Python (FastAPI, Django REST). All custom backends must expose a Swagger/OpenAPI spec. Always a REST API — no GraphQL
+- **Build Tool**: Vite
+- **Language**: TypeScript strictly — no `any`, no implicit any
+
+---
+
+## PROJECT STRUCTURE
+
+```
+src/
+├── modules/              # Feature modules (route-based grouping)
+│   └── [feature]/
+│       ├── components/   # Feature-specific components
+│       ├── hooks/        # Feature-specific hooks
+│       ├── api/          # React Query queries & mutations (hand-written or Orval-generated)
+│       ├── store/        # Zustand slices (if needed)
+│       ├── types.ts      # Feature types
+│       └── index.ts      # Public exports
+├── components/           # Shared/common UI components
+│   └── ui/               # shadcn/ui generated components (do not edit manually)
+├── hooks/                # Shared custom hooks
+├── lib/                  # Utilities, helpers, constants
+├── generated/            # Orval-generated API hooks & types (do not edit manually)
+├── router/               # React Router route definitions
+│   └── index.tsx
+├── types/                # Global TypeScript types
+└── App.tsx
+```
+
+- Group by **feature/route**, not by file type (no flat `/components`, `/hooks`, `/services` at root)
+- Common components used across features live in `src/components/`
+- Co-locate tests next to the file they test: `Component.test.tsx`
+
+---
+
+## ABSOLUTE IMPORTS
+
+Always use absolute imports. Configure `@` as the `src/` alias in `vite.config.ts` and `tsconfig.json`.
+
+```ts
+// ✅ Do this
+import { Button } from '@/components/ui/button'
+import { useAuth } from '@/hooks/useAuth'
+
+// ❌ Never this
+import { Button } from '../../../components/ui/button'
+```
+
+---
+
+## COMPONENTS
+
+### Single Responsibility
+A component should do one thing. If it's doing too many things, extract child components or hooks.
+
+```tsx
+// ❌ Too much in one component
+function Dashboard() {
+  const [users, setUsers] = useState([])
+  useEffect(() => { fetchUsers().then(setUsers) }, [])
+  return (
+    <div>
+      {users.map(u => (
+        <div key={u.id}>
+          <h2>{u.name}</h2>
+          <span>{u.email}</span>
+          <button onClick={() => deleteUser(u.id)}>Delete</button>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// ✅ Decomposed
+function Dashboard() {
+  const { data: users } = useUsers()
+  return <UserList users={users} />
+}
+```
+
+### No Nested Render Functions
+Never define render functions inside a component. Extract them as separate components instead.
+
+```tsx
+// ❌ Nested render function
+function Component() {
+  function renderHeader() {
+    return <header>...</header>
+  }
+  return <div>{renderHeader()}</div>
+}
+
+// ✅ Separate component
+function Header() {
+  return <header>...</header>
+}
+
+function Component() {
+  return <div><Header /></div>
+}
+```
+
+### Favour Composition Over Configuration
+Prefer composable components with `children` over large `config` prop objects.
+
+```tsx
+// ❌ Configuration-heavy
+<Card title="Hello" footer="Bye" icon="info" collapsible />
+
+// ✅ Composable
+<Card>
+  <Card.Header><InfoIcon /> Hello</Card.Header>
+  <Card.Body>...</Card.Body>
+  <Card.Footer>Bye</Card.Footer>
+</Card>
+```
+
+### Conditional Rendering
+Keep JSX readable. Use ternaries for simple conditions; extract complex conditions to variables or components.
+
+```tsx
+// ✅ Simple condition
+{isLoading ? <Spinner /> : <Content />}
+
+// ✅ Complex: extract to variable
+const content = isLoading
+  ? <Spinner />
+  : hasError
+    ? <ErrorState />
+    : <Content data={data} />
+
+return <div>{content}</div>
+```
+
+### Use Descriptive Prop Names
+Boolean props should read as adjectives or states, not verbs.
+
+```tsx
+// ❌
+<Button show loading handleClick={onClick} />
+
+// ✅
+<Button visible isLoading onClick={onClick} />
+```
+
+### Destructure Props
+Always destructure props at the function signature level.
+
+```tsx
+// ❌
+function UserCard(props) {
+  return <div>{props.user.name}</div>
+}
+
+// ✅
+function UserCard({ user }: UserCardProps) {
+  return <div>{user.name}</div>
+}
+```
+
+### Component Size
+If a component exceeds ~200 lines, it's probably doing too much. Break it apart.
+
+---
+
+## NAMING
+
+| Item | Convention | Example |
+|---|---|---|
+| Components | PascalCase | `UserProfileCard` |
+| Hooks | camelCase, `use` prefix | `useUserProfile` |
+| Context | PascalCase + `Context` suffix | `AuthContext` |
+| Event handlers | `handle` prefix | `handleSubmit`, `handleDelete` |
+| Boolean state | `is` / `has` / `can` prefix | `isLoading`, `hasError` |
+| Query keys | Descriptive arrays | `['users', userId]` |
+
+---
+
+## STATE MANAGEMENT
+
+### Choose the Right Tool
+
+| Data type | Tool |
+|---|---|
+| Server / async data | React Query |
+| Form data | React Hook Form |
+| Global UI state (modals, theme) | Zustand |
+| Local component state | `useState` / `useReducer` |
+| Derived values | Compute inline, no extra state |
+
+### Never Store Derived State
+
+```tsx
+// ❌ Derived state = bugs
+const [fullName, setFullName] = useState(`${firstName} ${lastName}`)
+
+// ✅ Compute it
+const fullName = `${firstName} ${lastName}`
+```
+
+### Colocate State
+Keep state as close to where it's used as possible. Only lift state when genuinely shared.
+
+### Avoid useEffect for Data Fetching
+Use React Query. Every raw `useEffect` for fetching is a bug waiting to happen (race conditions, missing cleanup, no caching).
+
+```tsx
+// ❌ Raw effect fetching
+useEffect(() => {
+  fetch('/api/users').then(r => r.json()).then(setUsers)
+}, [])
+
+// ✅ React Query (via Orval-generated hook or manual query)
+const { data: users, isLoading, error } = useGetUsers()
+```
+
+---
+
+## CUSTOM HOOKS
+
+- Extract stateful logic into custom hooks to keep components clean
+- A hook should do one thing
+- Name hooks to describe what they return, not how they work: `useUserPermissions` not `useCheckAndFetchPermissions`
+- Prefer hooks over HOCs and render props for composing behaviour
+
+```ts
+// ✅ Encapsulate complexity in a hook
+function useDisclosure(defaultOpen = false) {
+  const [isOpen, setIsOpen] = useState(defaultOpen)
+  const open = useCallback(() => setIsOpen(true), [])
+  const close = useCallback(() => setIsOpen(false), [])
+  const toggle = useCallback(() => setIsOpen(v => !v), [])
+  return { isOpen, open, close, toggle }
+}
+```
+
+---
+
+## TYPESCRIPT
+
+- Always type component props with a named interface or type alias
+- Never use `any` — use `unknown` and narrow the type if needed
+- Use `as const` for literal value arrays/objects
+- Prefer `interface` for object shapes, `type` for unions and mapped types
+- Export types alongside their related components/hooks
+
+```ts
+interface UserCardProps {
+  user: User
+  onDelete: (id: string) => void
+  isEditable?: boolean
+}
+```
+
+---
+
+## CODE STYLE
+
+- Prefer `const` arrow functions for component definitions, or named `function` declarations — be consistent per file
+- No dead code committed — remove unused imports, variables, commented-out blocks
+- Keep imports ordered: external libs → internal absolute → relative
+- Max one component per file (exceptions: tiny helper components used only within that file)
+- Avoid magic numbers — extract to named constants
+
+---
+
+## WHAT TO AVOID
+
+| ❌ Don't | ✅ Do instead |
+|---|---|
+| `useEffect` for data fetching | React Query |
+| Plain `fetch` in components | Orval-generated hooks or React Query |
+| Hand-writing API types for REST backends | Generate with Orval from Swagger spec |
+| Manual form validation | Zod + React Hook Form |
+| Relative import paths | Absolute `@/` paths |
+| Nested render functions | Extract to components |
+| `any` type | Proper types or `unknown` |
+| Global CSS classes | Tailwind utilities |
+| Storing derived state | Compute on the fly |
+| Props drilling 3+ levels | Zustand or composition |
+| Custom UI components | shadcn/ui primitives first |
+| Snapshot tests | Behaviour-based RTL tests |
+| `<BrowserRouter>` JSX tree | `createBrowserRouter` data router |
+| `window.location` for navigation | `useNavigate` |
+| Per-page auth checks | Layout-level `AuthGuard` |

@@ -1,0 +1,27 @@
+---
+description: Supabase Postgres — migrations, RLS, POPIA-related schema conventions
+globs: supabase/migrations/**/*.sql
+alwaysApply: false
+---
+
+# Postgres migrations (`supabase/migrations/`)
+
+## File naming and structure
+
+- Use **timestamp-prefixed** filenames: `YYYYMMDDHHMMSS_description.sql` (match existing sequence in the folder).
+- Start with a short **header block** describing purpose (see existing migrations such as `20260225000001_core_schema.sql`).
+- Prefer **idempotent** DDL where practical: `IF NOT EXISTS`, `IF EXISTS`, `CREATE OR REPLACE` for views/functions, and guarded policy drops before recreates when adjusting RLS.
+
+## RLS and security
+
+- New user-facing tables should assume **RLS enabled** with policies consistent with role model (`auth.uid()`, teacher/student/provider patterns). Follow patterns in `*_popia_*` and `*_rls_*` migrations when touching personal data.
+- Avoid widening access accidentally: test policy intent (who can `SELECT` / `INSERT` / `UPDATE` / `DELETE`).
+
+## Data and compliance
+
+- **POPIA / consent / export / deletion** flows: align with existing columns, RPCs, and Edge Functions; do not introduce parallel “shadow” copies of personal data without a clear retention story.
+- Prefer **additive** migrations for production: avoid destructive `DROP COLUMN` without a migration path unless explicitly requested.
+
+## Seeds and snippets
+
+- **Production migrations** stay in `migrations/`. One-off or local test data belongs in `seeds/` or `snippets/`, not mixed into numbered migrations unless the team treats them as required bootstrap.

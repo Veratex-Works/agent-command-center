@@ -1,0 +1,226 @@
+---
+description: React Data, Routing & Quality — Covers: Data Fetching (React Query + Orval), Routing (React Router), Forms, Testing, Performance, Error Handling
+globs:
+applyIntelligently: true
+---
+
+## DATA FETCHING (React Query + Orval)
+
+All backends are REST APIs with a Swagger/OpenAPI spec. For custom backends (Node.js / Python), use **Orval** to generate fully-typed React Query hooks directly from the spec — never hand-write API types or query functions that Orval can generate.
+
+### Orval Workflow
+1. Backend exposes a Swagger spec (e.g. `/api/docs-json`)
+2. Run `orval` to generate typed hooks + types into `src/generated/`
+3. Import and use the generated hooks directly in your feature modules
+4. Re-run generation whenever the API spec changes — treat `src/generated/` as read-only
+
+```ts
+// orval.config.ts
+export default defineConfig({
+  api: {
+    input: 'http://localhost:3000/api/docs-json', // or a local openapi.json
+    output: {
+      mode: 'tags-split',
+      target: 'src/generated/api',
+      client: 'react-query',
+      override: {
+        mutator: {
+          path: 'src/lib/axios.ts', // custom axios instance
+          name: 'axiosInstance',
+        },
+      },
+    },
+  },
+})
+```
+
+```ts
+// ✅ Use the generated hook — fully typed, no boilerplate
+import { useGetUsers, useDeleteUser } from '@/generated/api/users'
+
+function UserList() {
+  const { data, isLoading, error } = useGetUsers()
+  // ...
+}
+```
+
+### General Rules
+- Always define query functions in a dedicated `api/` file per feature module — never call the backend directly from a component
+- Never use plain `fetch` directly — all HTTP calls go through the Orval-generated axios instance or React Query hooks
+- Use `queryKey` arrays with enough specificity to enable fine-grained cache invalidation
+- Always handle `isLoading`, `isError`, and empty states — never assume data exists
+- Use `useMutation` for writes; invalidate related queries in `onSuccess`
+- Prefer optimistic updates for perceived performance on simple mutations
+
+```ts
+// For Supabase backends (no Orval), define query functions manually:
+// src/modules/users/api/users.ts
+export const usersKeys = {
+  all: ['users'] as const,
+  detail: (id: string) => ['users', id] as const,
+}
+
+export function useUsers() {
+  return useQuery({
+    queryKey: usersKeys.all,
+    queryFn: async () => {
+      const { data, error } = await supabase.from('users').select('*')
+      if (error) throw error
+      return data
+    },
+  })
+}
+```
+
+---
+
+## ROUTING (React Router v6+)
+
+- Use `createBrowserRouter` with the data router API — not the legacy `<BrowserRouter>` + JSX tree approach
+- Define all routes in `src/router/index.tsx` — one source of truth for the route tree
+- Use nested routes and `<Outlet />` for shared layouts (nav, sidebar, auth guards)
+- Use route-level `lazy` for code splitting — don't eagerly import every page
+- Use `useNavigate` for programmatic navigation, never `window.location`
+- Use `useParams` and `useSearchParams` for reading URL state — don't duplicate URL data into component state
+- Protect private routes with a layout-level auth guard component, not per-page checks
+
+```tsx
+// src/router/index.tsx
+import { createBrowserRouter } from 'react-router-dom'
+import { lazy, Suspense } from 'react'
+
+const DashboardPage = lazy(() => import('@/modules/dashboard/DashboardPage'))
+const UsersPage = lazy(() => import('@/modules/users/UsersPage'))
+
+export const router = createBrowserRouter([
+  {
+    path: '/',
+    element: <RootLayout />,       // nav, sidebar, toast provider
+    children: [
+      {
+        element: <AuthGuard />,    // redirects to /login if unauthenticated
+        children: [
+          {
+            path: 'dashboard',
+            element: (
+              <Suspense fallback={<PageSkeleton />}>
+                <DashboardPage />
+              </Suspense>
+            ),
+          },
+          {
+            path: 'users',
+            element: (
+              <Suspense fallback={<PageSkeleton />}>
+                <UsersPage />
+              </Suspense>
+            ),
+          },
+        ],
+      },
+      { path: 'login', element: <LoginPage /> },
+    ],
+  },
+])
+```
+
+```tsx
+// src/App.tsx
+import { RouterProvider } from 'react-router-dom'
+import { router } from '@/router'
+
+export default function App() {
+  return <RouterProvider router={router} />
+}
+```
+
+---
+
+## FORMS (React Hook Form + Zod)
+
+- Define a Zod schema first, always — the form is a contract
+- Derive the TypeScript type from the schema with `z.infer`
+- Never use uncontrolled `ref` for form inputs when RHF is in use
+
+```ts
+const schema = z.object({
+  email: z.string().email(),
+  password: z.string().min(8),
+})
+
+type FormData = z.infer<typeof schema>
+
+function LoginForm() {
+  const { register, handleSubmit, formState: { errors } } = useForm<FormData>({
+    resolver: zodResolver(schema),
+  })
+  // ...
+}
+```
+
+---
+
+## PERFORMANCE
+
+### Avoid Premature Optimisation
+Don't wrap everything in `useMemo` and `useCallback`. Profile first, optimise only when there's a measured problem.
+
+### When to Memoize
+- `useMemo`: expensive computations, reference-stable objects passed as props to memoized children
+- `useCallback`: event handlers passed to child components wrapped in `React.memo`
+- `React.memo`: pure presentational components that receive stable props
+
+### Avoid Creating Objects/Arrays in JSX
+They fail reference equality and cause unnecessary re-renders.
+
+```tsx
+// ❌ New array reference every render
+<Select options={['a', 'b', 'c']} />
+
+// ✅ Stable reference
+const OPTIONS = ['a', 'b', 'c'] as const
+<Select options={OPTIONS} />
+```
+
+### Lazy Load Heavy Components
+Use `React.lazy` + `Suspense` for route-level code splitting.
+
+```tsx
+const ReportsPage = React.lazy(() => import('@/modules/reports/ReportsPage'))
+
+<Suspense fallback={<PageSkeleton />}>
+  <ReportsPage />
+</Suspense>
+```
+
+---
+
+## TESTING
+
+- Use **Vitest** + **React Testing Library** (RTL)
+- Test behaviour, not implementation — query by role/text/label, never by class or component name
+- One test file per component: `UserCard.test.tsx` next to `UserCard.tsx`
+- Always test: default render, prop variations, user interactions, error and empty states
+
+```tsx
+// ✅ Test what the user sees
+test('shows delete button only when editable', () => {
+  render(<UserCard user={mockUser} isEditable />)
+  expect(screen.getByRole('button', { name: /delete/i })).toBeInTheDocument()
+})
+
+// ❌ Never test implementation details
+expect(wrapper.state().isDeleting).toBe(true)
+```
+
+- Mock API/backend calls at the module level, not inside individual tests
+- Avoid snapshot tests — they catch nothing meaningful and break constantly
+
+---
+
+## ERROR HANDLING
+
+- Every data-fetching component must handle `error` and `isLoading` states explicitly
+- Use React Query's `error` object, not try/catch in components
+- Use an `ErrorBoundary` at the route/page level to catch unexpected render errors
+- Surface user-friendly error messages via shadcn `Toast` — never raw `alert()`

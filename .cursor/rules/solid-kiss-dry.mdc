@@ -1,0 +1,244 @@
+---
+description: SOLID, KISS, and DRY principles for clean, maintainable code
+globs: **/*.{ts,tsx,js,jsx}
+alwaysApply: true
+---
+
+# SOLID · KISS · DRY Engineering Principles
+
+Apply these principles to every file, component, function, and module. They are non-negotiable quality gates, not suggestions.
+
+---
+
+## SOLID
+
+### S — Single Responsibility Principle
+Every module, class, component, or function must have **one reason to change**.
+
+- A React component either fetches data **or** renders UI — never both. Use a custom hook for data logic, a component for presentation.
+- A utility function does one thing. If the name contains "and", split it.
+- A Supabase Edge Function handles one operation. Separate auth, business logic, and DB access into distinct layers.
+- Keep files under ~200 lines. If a file grows beyond that, it is doing too much.
+
+```ts
+// ❌ Wrong — component owns too many concerns
+export function UserProfile({ userId }: { userId: string }) {
+  const [user, setUser] = useState(null);
+  useEffect(() => { supabase.from('users').select().eq('id', userId).then(...) }, []);
+  const handleUpdate = async (data) => { await supabase.from('users').update(data)... };
+  return <form onSubmit={handleUpdate}>...</form>;
+}
+
+// ✅ Correct — concerns separated
+// hooks/useUser.ts — data logic
+export function useUser(userId: string) {
+  return useQuery({ queryKey: ['user', userId], queryFn: () => fetchUser(userId) });
+}
+
+// components/UserProfile.tsx — pure presentation + interaction
+export function UserProfile({ userId }: { userId: string }) {
+  const { data: user } = useUser(userId);
+  return <UserForm user={user} onSubmit={updateUser} />;
+}
+```
+
+---
+
+### O — Open/Closed Principle
+Code should be **open for extension, closed for modification**.
+
+- Extend behaviour through composition and props, not by editing existing components.
+- Use variant maps, strategy patterns, or plugin-style config objects instead of growing if/else chains.
+- Never add a new feature by forking a component. Parameterise it instead.
+
+```ts
+// ❌ Wrong — must modify function to add new alert types
+function showAlert(type: string, message: string) {
+  if (type === 'success') { ... }
+  else if (type === 'error') { ... }
+  // Every new type = modifying this file
+}
+
+// ✅ Correct — extend by adding to the map, never touching the function
+const ALERT_CONFIG = {
+  success: { icon: CheckIcon, class: 'bg-green-100' },
+  error:   { icon: XIcon,     class: 'bg-red-100'   },
+  info:    { icon: InfoIcon,  class: 'bg-blue-100'  },
+} satisfies Record<string, AlertConfig>;
+
+function Alert({ type, message }: AlertProps) {
+  const config = ALERT_CONFIG[type];
+  return <div className={config.class}><config.icon />{message}</div>;
+}
+```
+
+---
+
+### L — Liskov Substitution Principle
+Subtypes and compositions must be **substitutable** for their base without breaking the program.
+
+- A component that extends another (via props spread or wrapping) must honour all original behaviours.
+- Never override a prop contract silently. If a `Button` accepts `onClick`, a `SubmitButton` must still honour it — don't swallow the handler.
+- Custom hooks that wrap library hooks (e.g. wrapping `useQuery`) must return a compatible shape.
+
+```ts
+// ❌ Wrong — SubmitButton breaks Button's contract
+function SubmitButton({ onClick, ...props }: ButtonProps) {
+  const handleClick = () => { doSomething(); }; // onClick silently ignored
+  return <Button onClick={handleClick} {...props} />;
+}
+
+// ✅ Correct — honours and composes the original handler
+function SubmitButton({ onClick, ...props }: ButtonProps) {
+  const handleClick = (e: MouseEvent) => { doSomething(); onClick?.(e); };
+  return <Button onClick={handleClick} {...props} />;
+}
+```
+
+---
+
+### I — Interface Segregation Principle
+Clients should not depend on interfaces they do not use. **Keep props and types lean**.
+
+- Don't pass the entire `user` object if a component only needs `user.name`. Pass `name: string`.
+- Split large TypeScript interfaces into composable smaller ones.
+- Don't add optional props to plug holes — if two components need different shapes, give them different components.
+
+```ts
+// ❌ Wrong — component receives far more than it needs
+function Avatar({ user }: { user: FullUserObject }) {
+  return <img src={user.avatarUrl} alt={user.displayName} />;
+}
+
+// ✅ Correct — component declares exactly what it needs
+function Avatar({ avatarUrl, displayName }: { avatarUrl: string; displayName: string }) {
+  return <img src={avatarUrl} alt={displayName} />;
+}
+```
+
+---
+
+### D — Dependency Inversion Principle
+High-level modules must not depend on low-level modules. **Depend on abstractions**.
+
+- Never import `supabase` directly inside a component. Call a service/repository function.
+- Abstract third-party SDKs (Supabase, Resend, n8n webhooks) behind a thin service layer so they can be swapped or mocked.
+- Inject dependencies (clients, config, fetchers) via parameters or React Context — don't hard-code them.
+
+```ts
+// ❌ Wrong — component is tightly coupled to Supabase
+import { supabase } from '@/lib/supabase';
+function ProjectList() {
+  const { data } = useQuery({ queryFn: () => supabase.from('projects').select() });
+}
+
+// ✅ Correct — component depends on an abstraction
+// services/projects.ts
+export const projectsService = {
+  list: () => supabase.from('projects').select().throwOnError(),
+};
+
+// hooks/useProjects.ts
+export function useProjects() {
+  return useQuery({ queryKey: ['projects'], queryFn: projectsService.list });
+}
+
+// components/ProjectList.tsx
+function ProjectList() {
+  const { data } = useProjects(); // no Supabase knowledge here
+}
+```
+
+---
+
+## KISS — Keep It Simple, Stupid
+
+Complexity is a liability. Every layer of abstraction must justify its existence.
+
+- **Prefer the boring solution.** A plain `.map()` beats a custom render-engine.
+- **Don't pre-optimise.** Write the simple version first. Optimise when profiling proves it necessary.
+- **Avoid premature abstraction.** Extract a shared abstraction only after you have seen the pattern appear three times.
+- **Flat over nested.** Flat component trees, flat state, flat folder structures.
+- **Readable names over clever code.** `getUserById` is better than `fetch`. Descriptive variable names eliminate the need for comments.
+- **One level of abstraction per function.** A function that orchestrates should not also manipulate raw data.
+- **Short functions.** If a function doesn't fit on one screen (~25 lines), refactor it.
+
+```ts
+// ❌ Wrong — unnecessary complexity
+const getStatus = (s: string) =>
+  ({ active: 'A', inactive: 'I', pending: 'P' }[s] ?? 'U');
+
+// ✅ Correct — immediately readable
+const STATUS_CODE: Record<string, string> = {
+  active:   'A',
+  inactive: 'I',
+  pending:  'P',
+};
+const getStatus = (status: string) => STATUS_CODE[status] ?? 'U';
+```
+
+---
+
+## DRY — Don't Repeat Yourself
+
+Every piece of knowledge must have a **single, authoritative representation**.
+
+### When to extract
+- The same logic appears **3+ times** → extract to a utility, hook, or service.
+- The same JSX structure appears **2+ times** with slight variation → extract to a component with props.
+- The same string/number appears **2+ times** → extract to a named constant.
+
+### Where things live
+| Repeated thing | Extract to |
+|---|---|
+| UI structure | `components/` |
+| Data-fetching logic | `hooks/use*.ts` |
+| Business/transformation logic | `lib/` or `utils/` |
+| API calls | `services/` |
+| Shared types | `types/` |
+| Magic values | `constants/` |
+
+### Anti-patterns to eliminate
+- Copy-pasted components that differ only in a label or colour → use props.
+- Duplicated Zod schemas across files → define once, import everywhere.
+- The same `supabase.from('table').select()` call in multiple places → one service function.
+- Repeated error handling blocks → one shared `handleError` utility.
+- Parallel state (`isLoading`, `isError`, `data`) declared in multiple components → one shared hook.
+
+```ts
+// ❌ Wrong — same shape duplicated across features
+// In orders.ts
+const { data, isLoading, error } = useQuery({ queryKey: ['orders'], queryFn: fetchOrders });
+if (isLoading) return <Spinner />;
+if (error) return <ErrorMessage error={error} />;
+
+// In invoices.ts — exact same pattern
+const { data, isLoading, error } = useQuery({ queryKey: ['invoices'], queryFn: fetchInvoices });
+if (isLoading) return <Spinner />;
+if (error) return <ErrorMessage error={error} />;
+
+// ✅ Correct — extract the repeated rendering logic once
+function QueryResult<T>({ query, render }: QueryResultProps<T>) {
+  if (query.isLoading) return <Spinner />;
+  if (query.error) return <ErrorMessage error={query.error} />;
+  return render(query.data as T);
+}
+
+// Usage — no duplication
+<QueryResult query={useOrders()}   render={(data) => <OrderList orders={data} />} />
+<QueryResult query={useInvoices()} render={(data) => <InvoiceList invoices={data} />} />
+```
+
+---
+
+## Enforcement Checklist
+
+Before committing any code, verify:
+
+- [ ] **SRP**: Does every function/component have exactly one responsibility?
+- [ ] **OCP**: Did I add a feature by extending rather than modifying?
+- [ ] **LSP**: Do wrappers and compositions honour the original contract?
+- [ ] **ISP**: Do props/interfaces contain only what the consumer actually uses?
+- [ ] **DIP**: Are components free of direct SDK/library imports?
+- [ ] **KISS**: Is there a simpler way to write this that is equally correct?
+- [ ] **DRY**: Does this logic already exist somewhere I can import from?

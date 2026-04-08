@@ -2,7 +2,8 @@ import { useRef, useCallback } from 'react'
 import { useChatStore } from '@/store/useChatStore'
 import { getDeviceIdentity, signChallenge } from '@/lib/crypto'
 import { saveDeviceToken } from '@/lib/storage'
-import type { GatewayPayload, HistoryEntry, HistoryMessage, ContentBlock } from '@/types'
+import { logWsChat, logWsChatRawIn } from '@/lib/websocketChatLog'
+import type { Config, GatewayPayload, HistoryEntry, HistoryMessage, ContentBlock } from '@/types'
 
 function extractMessageText(content: HistoryMessage['content']): string {
   if (typeof content === 'string') return content
@@ -12,16 +13,37 @@ function extractMessageText(content: HistoryMessage['content']): string {
     .join('')
 }
 
+function activeSessionKey(config: Config): string {
+  return config.sessionKey?.trim() || 'agent:main:webchat:direct:user1'
+}
+
+function isPayloadForActiveSession(payloadSessionKey: string | undefined, config: Config): boolean {
+  const active = activeSessionKey(config)
+  const sk = (payloadSessionKey ?? active).trim() || active
+  return sk === active
+}
+
+/** Suppress scheduled heartbeat ack text from appearing as chat. */
+function isHeartbeatAckText(s: string): boolean {
+  const t = s.trim()
+  return t === 'HEARTBEAT' || t === 'HEARTBEAT_OK'
+}
+
 export function useWebSocket() {
   const wsRef = useRef<WebSocket | null>(null)
   const currentRunIdRef = useRef<string | null>(null)
   const streamingIdRef = useRef<string | null>(null)
   const streamingTextRef = useRef<string>('')
   const pendingReconnectRef = useRef(false)
+  /** When set, assistant UI comes from `chat` `state: final` (not agent deltas). */
+  const chatFinalPendingRunIdRef = useRef<string | null>(null)
+  /** Last cumulative assistant text when the gateway does not emit the chat lane. */
+  const agentOnlyBufferRef = useRef<string>('')
 
   const store = useChatStore
 
   const sendRaw = useCallback((obj: unknown) => {
+    logWsChat('out', obj)
     const ws = wsRef.current
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify(obj))
@@ -31,6 +53,8 @@ export function useWebSocket() {
   const stopStreaming = useCallback(() => {
     store.getState().setRunning(false)
     store.getState().setTyping(false)
+    chatFinalPendingRunIdRef.current = null
+    agentOnlyBufferRef.current = ''
     if (streamingIdRef.current) {
       store.getState().finalizeStreamingMessage(streamingIdRef.current)
       streamingIdRef.current = null
@@ -41,7 +65,7 @@ export function useWebSocket() {
 
   const fetchHistory = useCallback(
     (sessionKey: string) => {
-      const key = sessionKey || 'agent:main:webchat:direct:user'
+      const key = sessionKey || 'agent:main:webchat:direct:user1'
       sendRaw({
         type: 'req',
         method: 'chat.history',
@@ -58,6 +82,7 @@ export function useWebSocket() {
       store.getState().clearMessages()
       entries.forEach((entry) => {
         if (!entry.content) return
+        if (entry.role !== 'user' && isHeartbeatAckText(entry.content)) return
         const role = entry.role === 'user' ? 'user' : 'bot'
         const ts = entry.ts
           ? new Date(Number(entry.ts)).toLocaleTimeString([], {
@@ -81,6 +106,7 @@ export function useWebSocket() {
 
         const text = extractMessageText(msg.content)
         if (!text) return
+        if (msg.role === 'assistant' && isHeartbeatAckText(text)) return
 
         const role = msg.role === 'user' ? 'user' : 'bot'
         const ts = msg.timestamp
@@ -127,20 +153,96 @@ export function useWebSocket() {
     [appendStreamingChunk],
   )
 
+  const handleChatLaneEvent = useCallback(
+    (payload: GatewayPayload['payload']) => {
+      if (!payload?.message || !payload.state) return
+      const { config } = store.getState()
+      if (!isPayloadForActiveSession(payload.sessionKey, config)) return
+
+      const { runId, state, message } = payload
+      if (runId) currentRunIdRef.current = runId
+
+      if (message.role !== 'assistant') return
+
+      const text = extractMessageText(message.content)
+
+      if (state === 'delta') {
+        if (runId) chatFinalPendingRunIdRef.current = runId
+        agentOnlyBufferRef.current = ''
+        store.getState().setTyping(true)
+        return
+      }
+
+      if (state === 'final') {
+        chatFinalPendingRunIdRef.current = null
+        agentOnlyBufferRef.current = ''
+        streamingIdRef.current = null
+        streamingTextRef.current = ''
+        store.getState().setTyping(false)
+        store.getState().setRunning(false)
+
+        if (isHeartbeatAckText(text)) return
+
+        if (text) {
+          const ts = message.timestamp
+            ? new Date(message.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+            : undefined
+          store.getState().addMessage({ type: 'bot', content: text, ts })
+        }
+      }
+    },
+    [store],
+  )
+
   const handleAgentEvent = useCallback(
     (payload: GatewayPayload['payload']) => {
       if (!payload) return
-      const { stream, data, runId } = payload
+      const { config } = store.getState()
+      if (!isPayloadForActiveSession(payload.sessionKey, config)) return
 
+      const { stream, data, runId } = payload
       if (runId) currentRunIdRef.current = runId
 
+      if (stream === 'lifecycle' && data?.phase === 'end') {
+        if (chatFinalPendingRunIdRef.current) return
+
+        const buf = agentOnlyBufferRef.current.trim()
+        agentOnlyBufferRef.current = ''
+        streamingIdRef.current = null
+        streamingTextRef.current = ''
+        store.getState().setTyping(false)
+        store.getState().setRunning(false)
+
+        if (buf && !isHeartbeatAckText(buf)) {
+          const ts = data.endedAt
+            ? new Date(data.endedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+            : undefined
+          store.getState().addMessage({ type: 'bot', content: buf, ts })
+        }
+        return
+      }
+
       if (stream === 'assistant' && data) {
+        if (chatFinalPendingRunIdRef.current) return
+
         const text = data.text ?? data.content ?? ''
+        if (text) agentOnlyBufferRef.current = text
+
         const isDone = !!(data.done || data.finished || data.aborted)
-        appendStreamingChunk(text, isDone)
+        if (isDone) {
+          const finalText = (text || agentOnlyBufferRef.current).trim()
+          agentOnlyBufferRef.current = ''
+          streamingIdRef.current = null
+          streamingTextRef.current = ''
+          store.getState().setTyping(false)
+          store.getState().setRunning(false)
+          if (finalText && !isHeartbeatAckText(finalText)) {
+            store.getState().addMessage({ type: 'bot', content: finalText })
+          }
+        }
       }
     },
-    [appendStreamingChunk],
+    [store],
   )
 
   const handleMessage = useCallback(
@@ -230,6 +332,23 @@ export function useWebSocket() {
         return
       }
 
+      // Gateway heartbeat indicator (not chat)
+      if (msg.type === 'event' && msg.event === 'heartbeat' && msg.payload) {
+        const p = msg.payload
+        const status = typeof p.status === 'string' ? p.status : ''
+        const explicitFail =
+          p.indicatorType === 'error' || /fail|error|denied/i.test(status)
+        const explicitOk = p.indicatorType === 'ok' || /^ok/i.test(status)
+        const ok = !explicitFail && explicitOk
+        store.getState().setHeartbeatIndicator({
+          at: typeof p.ts === 'number' ? p.ts : Date.now(),
+          ok,
+          reason: typeof p.reason === 'string' ? p.reason : undefined,
+          status: status || undefined,
+        })
+        return
+      }
+
       // chat.send ack
       if (msg.type === 'res' && msg.id?.startsWith('chat-')) {
         if (msg.payload?.runId) currentRunIdRef.current = msg.payload.runId
@@ -248,6 +367,12 @@ export function useWebSocket() {
         return
       }
 
+      // Chat sync lane (delta = typing only; final = one bot bubble)
+      if (msg.type === 'event' && msg.event === 'chat' && msg.payload?.state && msg.payload?.message) {
+        handleChatLaneEvent(msg.payload)
+        return
+      }
+
       // Streaming chat events (legacy)
       if (msg.type === 'event' && msg.event === 'chat') {
         handleChatEvent(msg.payload)
@@ -260,7 +385,16 @@ export function useWebSocket() {
         return
       }
     },
-    [store, sendRaw, fetchHistory, renderHistory, renderHistoryMessages, handleChatEvent, handleAgentEvent],
+    [
+      store,
+      sendRaw,
+      fetchHistory,
+      renderHistory,
+      renderHistoryMessages,
+      handleChatLaneEvent,
+      handleChatEvent,
+      handleAgentEvent,
+    ],
   )
 
   const connect = useCallback(async () => {
@@ -292,12 +426,15 @@ export function useWebSocket() {
     }
 
     newWs.onmessage = (e: MessageEvent) => {
+      const raw = e.data as string
       let msg: GatewayPayload
       try {
-        msg = JSON.parse(e.data as string) as GatewayPayload
+        msg = JSON.parse(raw) as GatewayPayload
       } catch {
+        logWsChatRawIn(typeof raw === 'string' ? raw : String(raw))
         return
       }
+      logWsChat('in', msg)
       void handleMessage(msg)
     }
 
@@ -338,9 +475,11 @@ export function useWebSocket() {
       store.getState().setRunning(true)
       streamingIdRef.current = null
       streamingTextRef.current = ''
+      chatFinalPendingRunIdRef.current = null
+      agentOnlyBufferRef.current = ''
 
       const idempotencyKey = `chat-${Date.now()}`
-      const key = config.sessionKey || 'agent:main:webchat:direct:user'
+      const key = config.sessionKey || 'agent:main:webchat:direct:user1'
 
       sendRaw({
         type: 'req',
@@ -363,7 +502,7 @@ export function useWebSocket() {
       id: `abort-${Date.now()}`,
       params: {
         ...(currentRunIdRef.current ? { runId: currentRunIdRef.current } : {}),
-        sessionKey: config.sessionKey || 'agent:main:webchat:direct:user',
+        sessionKey: config.sessionKey || 'agent:main:webchat:direct:user1',
       },
     })
     stopStreaming()

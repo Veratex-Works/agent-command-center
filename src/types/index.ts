@@ -24,6 +24,9 @@ export interface AgentDataChunk {
   done?: boolean
   finished?: boolean
   aborted?: boolean
+  /** Agent lifecycle stream (`stream: "lifecycle"`). */
+  phase?: string
+  endedAt?: number
 }
 
 export interface GatewayPayload {
@@ -64,6 +67,15 @@ export interface GatewayPayload {
     seq?: number
     sessionKey?: string
     ts?: number
+    /** Gateway chat sync lane (`event: "chat"`). */
+    state?: 'delta' | 'final'
+    message?: HistoryMessage
+    /** Heartbeat indicator (`event: "heartbeat"`). */
+    status?: string
+    reason?: string
+    indicatorType?: string
+    silent?: boolean
+    durationMs?: number
   }
 }
 

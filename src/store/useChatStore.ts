@@ -29,6 +29,10 @@ interface ChatStore {
   setShowConnectPrompt: (val: boolean) => void
   isTyping: boolean
   setTyping: (val: boolean) => void
+
+  /** Last gateway `heartbeat` event (not shown in chat). */
+  heartbeatIndicator: { at: number; ok: boolean; reason?: string; status?: string } | null
+  setHeartbeatIndicator: (v: ChatStore['heartbeatIndicator']) => void
 }
 
 let msgCounter = 0
@@ -83,4 +87,7 @@ export const useChatStore = create<ChatStore>((set) => ({
   setShowConnectPrompt: (showConnectPrompt) => set({ showConnectPrompt }),
   isTyping: false,
   setTyping: (isTyping) => set({ isTyping }),
+
+  heartbeatIndicator: null,
+  setHeartbeatIndicator: (heartbeatIndicator) => set({ heartbeatIndicator }),
 }))

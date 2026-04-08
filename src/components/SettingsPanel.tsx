@@ -91,7 +91,7 @@ export function SettingsPanel({ onAbort, onReconnect }: SettingsPanelProps) {
             type="text"
             value={sessionKey}
             onChange={(e) => setSessionKey(e.target.value)}
-            placeholder="agent:main:webchat:direct:user"
+            placeholder="agent:main:webchat:direct:user1"
             autoComplete="off"
             spellCheck={false}
             className="bg-surface2 border border-border text-content font-mono text-[13px] px-3 py-2.5 rounded-lg outline-none transition-colors duration-200 focus:border-accent placeholder:text-dim w-full"

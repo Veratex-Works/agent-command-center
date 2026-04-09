@@ -1,0 +1,115 @@
+{
+  "name": "OpenClaw deploy bot",
+  "meta": {
+    "description": "Import into n8n. Edge Function POSTs JSON: { botDeploymentId, customerLabel, env }. Replace Hostinger URL and add credentials. Add polling/SSH nodes between VPS create and docker deploy as needed."
+  },
+  "nodes": [
+    {
+      "id": "webhook-openclaw",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "openclaw-deploy",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "set-env",
+      "name": "Map payload",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [480, 300],
+      "parameters": {
+        "mode": "manual",
+        "duplicateItem": false,
+        "assignments": {
+          "assignments": [
+            {
+              "id": "a1",
+              "name": "botDeploymentId",
+              "value": "={{ $json.body.botDeploymentId ?? $json.botDeploymentId }}",
+              "type": "string"
+            },
+            {
+              "id": "a2",
+              "name": "customerLabel",
+              "value": "={{ $json.body.customerLabel ?? $json.customerLabel }}",
+              "type": "string"
+            },
+            {
+              "id": "a3",
+              "name": "env",
+              "value": "={{ $json.body.env ?? $json.env }}",
+              "type": "object"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "http-vps",
+      "name": "Provision new VPS",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [720, 300],
+      "parameters": {
+        "method": "POST",
+        "url": "https://REPLACE_WITH_HOSTINGER_OR_PROVIDER_API",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ label: $json.customerLabel, deploymentId: $json.botDeploymentId }) }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "http-docker",
+      "name": "Deploy stack on new host",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [960, 300],
+      "parameters": {
+        "method": "POST",
+        "url": "https://REPLACE_AFTER_VPS_HAS_PUBLIC_IP",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.env) }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "respond",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1200, 300],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { ok: true } }}",
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [[{ "node": "Map payload", "type": "main", "index": 0 }]]
+    },
+    "Map payload": {
+      "main": [[{ "node": "Provision new VPS", "type": "main", "index": 0 }]]
+    },
+    "Provision new VPS": {
+      "main": [[{ "node": "Deploy stack on new host", "type": "main", "index": 0 }]]
+    },
+    "Deploy stack on new host": {
+      "main": [[{ "node": "Respond to Webhook", "type": "main", "index": 0 }]]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

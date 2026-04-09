@@ -1,0 +1,29 @@
+---
+description: Supabase Edge Functions — Deno, auth, CORS, shared _shared modules
+globs: supabase/functions/**/*.ts
+alwaysApply: false
+---
+
+# Supabase Edge Functions (Deno)
+
+## Runtime and layout
+
+- Each function is a **single responsibility** entry in `supabase/functions/<name>/index.ts`.
+- Reuse **`supabase/functions/_shared/`** (`auth.ts`, `cors.ts`, `validation.ts`, `config.ts`, email helpers, etc.). Do not duplicate CORS or JWT parsing.
+- Use **Deno** imports (`https://esm.sh/...` or project `deno.json`); **no Node-only** APIs unless explicitly available in the Deno deploy target.
+
+## Request lifecycle
+
+1. Call **`handleCors(req)`** from `_shared/cors.ts` first; return its response for **OPTIONS**.
+2. Use **`requireAuth`**, **`requireTeacher`**, **`requireStudent`**, or **`requireProvider`** (or equivalent) from `_shared/auth.ts` — do not invent ad-hoc JWT parsing in new functions.
+3. Return JSON errors with **`CORS_HEADERS`** and appropriate **status** (401, 403, 400, 500), consistent with existing functions.
+4. Read secrets only from **`Deno.env`**; never log secrets or full tokens.
+
+## Validation and side effects
+
+- Validate bodies and query params with shared helpers / explicit checks; fail fast with **400** and a clear `error` message shape used elsewhere in the repo.
+- For DB writes, prefer **least privilege** via RLS-aware patterns already used in sibling functions (service role where intended, with explicit checks).
+
+## Testing mindset
+
+- After changes, callers must still receive stable JSON shapes unless the task requires a versioned breaking change (document in PR).

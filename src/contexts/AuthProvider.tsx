@@ -57,13 +57,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, s) => {
+    } = supabase.auth.onAuthStateChange((event, s) => {
       void (async () => {
         if (cancelled) return
         setSession(s)
         setUser(s?.user ?? null)
-        if (s?.user) await loadProfile(s.user.id)
-        else setProfile(null)
+
+        if (!s?.user) {
+          setProfile(null)
+          setLoading(false)
+          return
+        }
+
+        // Token refresh updates the session only; profile is unchanged.
+        if (event === 'TOKEN_REFRESHED') return
+
+        // Initial session is handled by getSession() above; avoid duplicate loading UI.
+        const showAuthLoading = event !== 'INITIAL_SESSION'
+
+        if (showAuthLoading) setLoading(true)
+        await loadProfile(s.user.id)
+        if (cancelled) return
+        if (showAuthLoading) setLoading(false)
       })()
     })
 

@@ -1,5 +1,5 @@
 ---
-description: eact Architecture & Components — Inspired by Alex Kondov's "Tao of React" + modern React ecosystem (2024)
+description: React + Supabase architecture & components — Tao of React + TanStack Query, Postgres/Auth/Edge Functions
 globs:
 applyIntelligently: true
 ---
@@ -10,10 +10,11 @@ applyIntelligently: true
 - **Styling**: Tailwind CSS utility classes only — no inline styles, no CSS modules
 - **Routing**: React Router v6+ — use `createBrowserRouter` with nested routes and loaders
 - **Data Fetching**: React Query (TanStack Query) — never use raw `useEffect` or plain `fetch` directly in components
-- **API Types**: Orval — when a custom backend is present, always generate types and React Query hooks from the OpenAPI/Swagger spec. Never hand-write API types that can be generated
+- **Backend (primary)**: **Supabase** — Postgres via the JS client, Auth, Storage, Realtime as needed; **Edge Functions** in `supabase/functions/` (Deno). Schema and RLS live in `supabase/migrations/`. Follow `.cursor/rules/supabase-postgres.mdc` and `.cursor/rules/supabase-edge-functions.mdc` when touching those trees
+- **Data access in the app**: A thin **service/repository layer** wraps the Supabase client; feature hooks use React Query with `queryFn` / mutations calling those services. **Do not** import or call `supabase` directly from presentational components (see workspace SOLID/DIP rules)
+- **API Types (optional)**: **Orval** — only when this project also consumes a **separate** OpenAPI/Swagger REST API. Generate types and hooks into `src/generated/` from that spec. For table/RPC access through Supabase, use shared DB types (e.g. generated from Supabase CLI) and hand-written query keys/hooks — do not assume Orval for core Supabase reads/writes
 - **Global State**: Zustand — only for client-side UI state not covered by React Query
 - **Forms**: React Hook Form + Zod — always validate schemas with Zod, never manual validation
-- **Backend**: Project-dependent — Supabase, or a custom REST API built in Node.js (Express, Fastify, NestJS) or Python (FastAPI, Django REST). All custom backends must expose a Swagger/OpenAPI spec. Always a REST API — no GraphQL
 - **Build Tool**: Vite
 - **Language**: TypeScript strictly — no `any`, no implicit any
 
@@ -22,27 +23,32 @@ applyIntelligently: true
 ## PROJECT STRUCTURE
 
 ```
+supabase/
+├── migrations/           # Postgres schema, RLS — see supabase-postgres.mdc
+└── functions/            # Edge Functions (Deno) — see supabase-edge-functions.mdc
+
 src/
 ├── modules/              # Feature modules (route-based grouping)
 │   └── [feature]/
 │       ├── components/   # Feature-specific components
-│       ├── hooks/        # Feature-specific hooks
-│       ├── api/          # React Query queries & mutations (hand-written or Orval-generated)
+│       ├── hooks/        # Feature-specific hooks (often wrap React Query)
+│       ├── api/          # React Query queries & mutations (call services — no raw client in UI)
 │       ├── store/        # Zustand slices (if needed)
 │       ├── types.ts      # Feature types
 │       └── index.ts      # Public exports
 ├── components/           # Shared/common UI components
 │   └── ui/               # shadcn/ui generated components (do not edit manually)
 ├── hooks/                # Shared custom hooks
-├── lib/                  # Utilities, helpers, constants
-├── generated/            # Orval-generated API hooks & types (do not edit manually)
+├── services/             # Supabase (and other backend) facades — single place for .from(), .rpc(), Edge Function fetch
+├── lib/                  # Utilities, helpers, constants (e.g. createBrowserClient wrapper if not in services)
+├── generated/            # Orval output for optional OpenAPI clients; Supabase DB types if generated here
 ├── router/               # React Router route definitions
 │   └── index.tsx
 ├── types/                # Global TypeScript types
 └── App.tsx
 ```
 
-- Group by **feature/route**, not by file type (no flat `/components`, `/hooks`, `/services` at root)
+- Group by **feature/route**, not by file type (no flat `/components`, `/hooks` at root without the structure above)
 - Common components used across features live in `src/components/`
 - Co-locate tests next to the file they test: `Component.test.tsx`
 
@@ -225,8 +231,8 @@ useEffect(() => {
   fetch('/api/users').then(r => r.json()).then(setUsers)
 }, [])
 
-// ✅ React Query (via Orval-generated hook or manual query)
-const { data: users, isLoading, error } = useGetUsers()
+// ✅ React Query — feature hook calling a service (Supabase or Orval-generated REST)
+const { data: users, isLoading, error } = useUsers()
 ```
 
 ---
@@ -284,8 +290,9 @@ interface UserCardProps {
 | ❌ Don't | ✅ Do instead |
 |---|---|
 | `useEffect` for data fetching | React Query |
-| Plain `fetch` in components | Orval-generated hooks or React Query |
-| Hand-writing API types for REST backends | Generate with Orval from Swagger spec |
+| Plain `fetch` / `supabase` in components | Services + React Query hooks |
+| Duplicated Supabase queries across features | One service function, reused query keys |
+| Hand-writing types when Orval or Supabase codegen can supply them | Orval (OpenAPI) or `supabase gen types` for DB shapes |
 | Manual form validation | Zod + React Hook Form |
 | Relative import paths | Absolute `@/` paths |
 | Nested render functions | Extract to components |

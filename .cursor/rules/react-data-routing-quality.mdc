@@ -1,21 +1,61 @@
 ---
-description: React Data, Routing & Quality — Covers: Data Fetching (React Query + Orval), Routing (React Router), Forms, Testing, Performance, Error Handling
+description: React + Supabase data, routing & quality — TanStack Query, services layer, optional Orval, React Router, forms, testing
 globs:
 applyIntelligently: true
 ---
 
-## DATA FETCHING (React Query + Orval)
+## DATA FETCHING (React Query + Supabase)
 
-All backends are REST APIs with a Swagger/OpenAPI spec. For custom backends (Node.js / Python), use **Orval** to generate fully-typed React Query hooks directly from the spec — never hand-write API types or query functions that Orval can generate.
+**Default path**: Supabase (Postgres, Auth, Storage, Realtime, Edge Functions). React Query owns server state; **query and mutation functions call `src/services/` (or feature-level facades)** — not the Supabase client from components. Align query keys and invalidation with the same boundaries you use in services.
 
-### Orval Workflow
-1. Backend exposes a Swagger spec (e.g. `/api/docs-json`)
-2. Run `orval` to generate typed hooks + types into `src/generated/`
-3. Import and use the generated hooks directly in your feature modules
-4. Re-run generation whenever the API spec changes — treat `src/generated/` as read-only
+### Supabase + React Query pattern
 
 ```ts
-// orval.config.ts
+// src/services/users.ts — single responsibility: Supabase access
+import { supabase } from '@/lib/supabase' // or getBrowserClient()
+
+export const usersService = {
+  list: async () => {
+    const { data, error } = await supabase.from('users').select('*')
+    if (error) throw error
+    return data
+  },
+}
+```
+
+```ts
+// src/modules/users/api/users.ts — React Query only; no UI imports here from supabase
+import { useQuery } from '@tanstack/react-query'
+import { usersService } from '@/services/users'
+
+export const usersKeys = {
+  all: ['users'] as const,
+  detail: (id: string) => ['users', id] as const,
+}
+
+export function useUsers() {
+  return useQuery({
+    queryKey: usersKeys.all,
+    queryFn: () => usersService.list(),
+  })
+}
+```
+
+- Prefer **RLS** for authorization; use the **anon** or **authenticated** client from the browser as designed. Reserve **service role** for trusted server-side or Edge Function code — never expose it in the Vite bundle
+- For **Edge Functions**, encapsulate `fetch` to `functions/v1/...` in `services/` (with auth headers), then expose React Query hooks the same way as table reads
+- Generate **DB types** with Supabase CLI (`supabase gen types`) when the team uses codegen; keep hand-written feature types minimal and derived from those where possible
+
+### Optional: Orval (separate OpenAPI REST API)
+
+Use **Orval** only when this app also talks to a **distinct** REST API documented with OpenAPI/Swagger — not for routine Supabase table access.
+
+1. Backend exposes a Swagger spec (e.g. `/api/docs-json`)
+2. Run `orval` to generate typed hooks + types into `src/generated/`
+3. Import generated hooks in feature modules (often behind the same `api/` + invalidation conventions)
+4. Treat `src/generated/` as read-only; re-run when the spec changes
+
+```ts
+// orval.config.ts (when applicable)
 export default defineConfig({
   api: {
     input: 'http://localhost:3000/api/docs-json', // or a local openapi.json
@@ -25,7 +65,7 @@ export default defineConfig({
       client: 'react-query',
       override: {
         mutator: {
-          path: 'src/lib/axios.ts', // custom axios instance
+          path: 'src/lib/axios.ts',
           name: 'axiosInstance',
         },
       },
@@ -35,42 +75,22 @@ export default defineConfig({
 ```
 
 ```ts
-// ✅ Use the generated hook — fully typed, no boilerplate
-import { useGetUsers, useDeleteUser } from '@/generated/api/users'
+// ✅ Generated hook for the non-Supabase REST surface only
+import { useGetExternalResource } from '@/generated/api/example'
 
-function UserList() {
-  const { data, isLoading, error } = useGetUsers()
+function ExampleList() {
+  const { data, isLoading, error } = useGetExternalResource()
   // ...
 }
 ```
 
 ### General Rules
-- Always define query functions in a dedicated `api/` file per feature module — never call the backend directly from a component
-- Never use plain `fetch` directly — all HTTP calls go through the Orval-generated axios instance or React Query hooks
-- Use `queryKey` arrays with enough specificity to enable fine-grained cache invalidation
-- Always handle `isLoading`, `isError`, and empty states — never assume data exists
+- Define query/mutation usage in each feature’s `api/` (or shared hooks) — **components** consume hooks, not clients
+- No plain `fetch` or raw Supabase calls in presentational components — route through services + React Query (or a single Orval mutator for generated REST)
+- Use `queryKey` arrays with enough specificity for fine-grained invalidation
+- Always handle `isLoading`, `isError`, and empty states
 - Use `useMutation` for writes; invalidate related queries in `onSuccess`
-- Prefer optimistic updates for perceived performance on simple mutations
-
-```ts
-// For Supabase backends (no Orval), define query functions manually:
-// src/modules/users/api/users.ts
-export const usersKeys = {
-  all: ['users'] as const,
-  detail: (id: string) => ['users', id] as const,
-}
-
-export function useUsers() {
-  return useQuery({
-    queryKey: usersKeys.all,
-    queryFn: async () => {
-      const { data, error } = await supabase.from('users').select('*')
-      if (error) throw error
-      return data
-    },
-  })
-}
-```
+- Prefer optimistic updates only when the UX benefit is clear and rollback is handled
 
 ---
 

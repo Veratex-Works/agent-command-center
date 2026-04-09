@@ -1,5 +1,6 @@
 import { Trash2, Settings } from 'lucide-react'
 import { useChatStore } from '@/store/useChatStore'
+import { HeartbeatLight } from '@/components/HeartbeatLight'
 import { StatusPill } from '@/components/StatusPill'
 
 export function Header() {
@@ -12,6 +13,7 @@ export function Header() {
           🦞 <span className="text-muted font-normal">openclaw</span>
         </div>
         <StatusPill />
+        <HeartbeatLight />
       </div>
 
       <div className="flex gap-2 items-center">

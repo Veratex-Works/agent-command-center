@@ -77,3 +77,42 @@ body {
 
 .textarea-scrollbar::-webkit-scrollbar { width: 3px; }
 .textarea-scrollbar::-webkit-scrollbar-thumb { background: var(--color-border); }
+
+/* TipTap composer */
+.tiptap.ProseMirror {
+  outline: none;
+}
+.tiptap p {
+  margin: 0;
+}
+.tiptap p + p {
+  margin-top: 0.35em;
+}
+.tiptap p.is-editor-empty:first-child::before {
+  color: var(--color-dim);
+  content: attr(data-placeholder);
+  float: left;
+  height: 0;
+  pointer-events: none;
+}
+.tiptap strong {
+  font-weight: 600;
+}
+.tiptap em {
+  font-style: italic;
+}
+.tiptap ul {
+  list-style: disc;
+  padding-left: 1.25rem;
+  margin: 0.35em 0;
+}
+.tiptap ol {
+  list-style: decimal;
+  padding-left: 1.25rem;
+  margin: 0.35em 0;
+}
+.tiptap a {
+  color: var(--color-accent2);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}

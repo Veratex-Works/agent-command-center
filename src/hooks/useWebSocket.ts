@@ -5,6 +5,8 @@ import { saveDeviceToken } from '@/lib/storage'
 import { logWsChat, logWsChatRawIn } from '@/lib/websocketChatLog'
 import type { Config, GatewayPayload, HistoryEntry, HistoryMessage, ContentBlock } from '@/types'
 
+const LEGACY_DEFAULT_SESSION_KEY = 'agent:main:webchat:direct:user1'
+
 function extractMessageText(content: HistoryMessage['content']): string {
   if (typeof content === 'string') return content
   return content
@@ -13,12 +15,13 @@ function extractMessageText(content: HistoryMessage['content']): string {
     .join('')
 }
 
-function activeSessionKey(config: Config): string {
-  return config.sessionKey?.trim() || 'agent:main:webchat:direct:user1'
-}
 
-function isPayloadForActiveSession(payloadSessionKey: string | undefined, config: Config): boolean {
-  const active = activeSessionKey(config)
+function isPayloadForActiveSession(
+  payloadSessionKey: string | undefined,
+  config: Config,
+  resolve: (c: Config) => string,
+): boolean {
+  const active = resolve(config)
   const sk = (payloadSessionKey ?? active).trim() || active
   return sk === active
 }
@@ -29,8 +32,14 @@ function isHeartbeatAckText(s: string): boolean {
   return t === 'HEARTBEAT' || t === 'HEARTBEAT_OK'
 }
 
-export function useWebSocket() {
+/**
+ * @param getFallbackSessionKey When `config.sessionKey` is empty, use this (e.g. user id segment).
+ *   Passed by reference; latest callback is read via an internal ref (stable `resolveSessionKey`).
+ */
+export function useWebSocket(getFallbackSessionKey?: () => string | undefined) {
   const wsRef = useRef<WebSocket | null>(null)
+  const fallbackRef = useRef<(() => string | undefined) | undefined>(getFallbackSessionKey)
+  fallbackRef.current = getFallbackSessionKey
   const currentRunIdRef = useRef<string | null>(null)
   const streamingIdRef = useRef<string | null>(null)
   const streamingTextRef = useRef<string>('')
@@ -41,6 +50,14 @@ export function useWebSocket() {
   const agentOnlyBufferRef = useRef<string>('')
 
   const store = useChatStore
+
+  const resolveSessionKey = useCallback((config: Config): string => {
+    const manual = config.sessionKey?.trim()
+    if (manual) return manual
+    const fb = fallbackRef.current?.()?.trim()
+    if (fb) return fb
+    return LEGACY_DEFAULT_SESSION_KEY
+  }, [])
 
   const sendRaw = useCallback((obj: unknown) => {
     logWsChat('out', obj)
@@ -64,8 +81,8 @@ export function useWebSocket() {
   }, [store])
 
   const fetchHistory = useCallback(
-    (sessionKey: string) => {
-      const key = sessionKey || 'agent:main:webchat:direct:user1'
+    (config: Config) => {
+      const key = resolveSessionKey(config)
       sendRaw({
         type: 'req',
         method: 'chat.history',
@@ -73,7 +90,7 @@ export function useWebSocket() {
         params: { sessionKey: key },
       })
     },
-    [sendRaw],
+    [sendRaw, resolveSessionKey],
   )
 
   const renderHistory = useCallback(
@@ -157,7 +174,7 @@ export function useWebSocket() {
     (payload: GatewayPayload['payload']) => {
       if (!payload?.message || !payload.state) return
       const { config } = store.getState()
-      if (!isPayloadForActiveSession(payload.sessionKey, config)) return
+      if (!isPayloadForActiveSession(payload.sessionKey, config, resolveSessionKey)) return
 
       const { runId, state, message } = payload
       if (runId) currentRunIdRef.current = runId
@@ -191,14 +208,14 @@ export function useWebSocket() {
         }
       }
     },
-    [store],
+    [store, resolveSessionKey],
   )
 
   const handleAgentEvent = useCallback(
     (payload: GatewayPayload['payload']) => {
       if (!payload) return
       const { config } = store.getState()
-      if (!isPayloadForActiveSession(payload.sessionKey, config)) return
+      if (!isPayloadForActiveSession(payload.sessionKey, config, resolveSessionKey)) return
 
       const { stream, data, runId } = payload
       if (runId) currentRunIdRef.current = runId
@@ -242,7 +259,7 @@ export function useWebSocket() {
         }
       }
     },
-    [store],
+    [store, resolveSessionKey],
   )
 
   const handleMessage = useCallback(
@@ -284,7 +301,9 @@ export function useWebSocket() {
               signedAt,
               nonce,
             },
-            ...(config.sessionKey ? { sessionKey: config.sessionKey } : {}),
+            ...(resolveSessionKey(config)
+              ? { sessionKey: resolveSessionKey(config) }
+              : {}),
           },
         })
         return
@@ -297,7 +316,7 @@ export function useWebSocket() {
         }
         store.getState().setStatus('connected', 'connected')
         store.getState().addSystemMessage('Connected ✓', 'ok')
-        fetchHistory(config.sessionKey)
+        fetchHistory(config)
         return
       }
 
@@ -394,6 +413,7 @@ export function useWebSocket() {
       handleChatLaneEvent,
       handleChatEvent,
       handleAgentEvent,
+      resolveSessionKey,
     ],
   )
 
@@ -479,7 +499,7 @@ export function useWebSocket() {
       agentOnlyBufferRef.current = ''
 
       const idempotencyKey = `chat-${Date.now()}`
-      const key = config.sessionKey || 'agent:main:webchat:direct:user1'
+      const key = resolveSessionKey(config)
 
       sendRaw({
         type: 'req',
@@ -488,7 +508,7 @@ export function useWebSocket() {
         params: { message: text, idempotencyKey, sessionKey: key },
       })
     },
-    [store, sendRaw],
+    [store, sendRaw, resolveSessionKey],
   )
 
   const abortRun = useCallback(() => {
@@ -502,12 +522,12 @@ export function useWebSocket() {
       id: `abort-${Date.now()}`,
       params: {
         ...(currentRunIdRef.current ? { runId: currentRunIdRef.current } : {}),
-        sessionKey: config.sessionKey || 'agent:main:webchat:direct:user1',
+        sessionKey: resolveSessionKey(config),
       },
     })
     stopStreaming()
     store.getState().addSystemMessage('Run aborted.', 'warn')
-  }, [store, sendRaw, stopStreaming])
+  }, [store, sendRaw, stopStreaming, resolveSessionKey])
 
   const reconnect = useCallback(() => {
     pendingReconnectRef.current = true

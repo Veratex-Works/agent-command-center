@@ -1,6 +1,8 @@
 import { useState, type FormEvent } from 'react'
 import { X } from 'lucide-react'
+import { useAuth } from '@/hooks/useAuth'
 import { useChatStore } from '@/store/useChatStore'
+import { getDefaultSessionKeyForUser } from '@/lib/sessionKey'
 import type { Config } from '@/types'
 
 interface SettingsPanelProps {
@@ -25,6 +27,10 @@ function SettingsFormBody({
   setConfig,
   setSettingsOpen,
 }: SettingsFormBodyProps) {
+  const { user, profile } = useAuth()
+  const sessionKeyEditable = profile?.role === 'superadmin'
+  const derivedSessionKey = user?.id ? getDefaultSessionKeyForUser(user.id) : ''
+
   const [url, setUrl] = useState(config.url)
   const [token, setToken] = useState(config.token)
   const [sessionKey, setSessionKey] = useState(config.sessionKey)
@@ -34,7 +40,8 @@ function SettingsFormBody({
   const handleSave = (e: FormEvent) => {
     e.preventDefault()
     if (isRunning) onAbort()
-    setConfig({ url: url.trim(), token: token.trim(), sessionKey: sessionKey.trim() })
+    const sk = sessionKeyEditable ? sessionKey.trim() : derivedSessionKey
+    setConfig({ url: url.trim(), token: token.trim(), sessionKey: sk })
     setSettingsOpen(false)
     onReconnect()
   }
@@ -86,17 +93,32 @@ function SettingsFormBody({
 
       <div className="flex flex-col gap-1.5">
         <label className="font-mono text-[11px] text-muted uppercase tracking-[0.05em]">
-          Session Key <span className="text-dim normal-case">(optional)</span>
+          Session Key{' '}
+          {sessionKeyEditable ? (
+            <span className="text-dim normal-case">(optional)</span>
+          ) : (
+            <span className="text-dim normal-case">(your account)</span>
+          )}
         </label>
-        <input
-          type="text"
-          value={sessionKey}
-          onChange={(e) => setSessionKey(e.target.value)}
-          placeholder="agent:main:webchat:direct:user1"
-          autoComplete="off"
-          spellCheck={false}
-          className="bg-surface2 border border-border text-content font-mono text-[13px] px-3 py-2.5 rounded-lg outline-none transition-colors duration-200 focus:border-accent placeholder:text-dim w-full"
-        />
+        {sessionKeyEditable ? (
+          <input
+            type="text"
+            value={sessionKey}
+            onChange={(e) => setSessionKey(e.target.value)}
+            placeholder={
+              user?.id
+                ? getDefaultSessionKeyForUser(user.id)
+                : 'agent:main:webchat:direct:…'
+            }
+            autoComplete="off"
+            spellCheck={false}
+            className="bg-surface2 border border-border text-content font-mono text-[13px] px-3 py-2.5 rounded-lg outline-none transition-colors duration-200 focus:border-accent placeholder:text-dim w-full"
+          />
+        ) : (
+          <div className="bg-surface2 border border-border text-muted font-mono text-[13px] px-3 py-2.5 rounded-lg w-full break-all">
+            {derivedSessionKey || '—'}
+          </div>
+        )}
       </div>
 
       <div className="flex gap-2.5 justify-end">

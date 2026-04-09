@@ -62,10 +62,9 @@ export function DbConnectionPage() {
       <section className="bg-surface border border-border rounded-2xl p-6 max-w-xl flex flex-col gap-2">
         <h2 className="text-lg font-bold text-content m-0">Client sessions</h2>
         <p className="text-muted text-sm m-0">
-          Link client accounts to bot chat sessions will be configured here. For a dedicated
-          view, see{' '}
-          <Link to="/admin/sessions" className="text-accent font-semibold hover:underline">
-            Admin / Sessions
+          Link client accounts to deployed bots is on{' '}
+          <Link to="/deploy-bot" className="text-accent font-semibold hover:underline">
+            Deploy bot
           </Link>
           .
         </p>

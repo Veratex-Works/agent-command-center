@@ -14,21 +14,31 @@ export async function requireSuperadmin(req: Request): Promise<
   if (!authHeader?.startsWith('Bearer ')) {
     return { ok: false, response: corsJson({ error: 'Unauthorized' }, 401) }
   }
+  const jwt = authHeader.slice('Bearer '.length).trim()
+  if (!jwt) {
+    return { ok: false, response: corsJson({ error: 'Unauthorized' }, 401) }
+  }
 
   const url = env('SUPABASE_URL')
   const anon = env('SUPABASE_ANON_KEY')
   const serviceKey = env('SUPABASE_SERVICE_ROLE_KEY')
   if (!url || !anon || !serviceKey) {
-    return { ok: false, response: corsJson({ error: 'Server misconfigured' }, 500) }
+    return {
+      ok: false,
+      response: corsJson(
+        { error: 'Server misconfigured', stage: 'edge_env_missing' },
+        500,
+      ),
+    }
   }
 
-  const userClient = createClient(url, anon, {
-    global: { headers: { Authorization: authHeader } },
-  })
+  // Pass the JWT explicitly: getUser() without args uses the browser session path and
+  // fails in Edge/Deno where there is no persisted session.
+  const userClient = createClient(url, anon)
   const {
     data: { user },
     error: userErr,
-  } = await userClient.auth.getUser()
+  } = await userClient.auth.getUser(jwt)
   if (userErr || !user) {
     return { ok: false, response: corsJson({ error: 'Unauthorized' }, 401) }
   }

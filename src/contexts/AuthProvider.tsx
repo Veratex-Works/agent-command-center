@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from 'react'
@@ -12,6 +13,7 @@ import {
   registerWsChatLogProductionSink,
 } from '@/lib/websocketChatLog'
 import { insertChatLogBatch } from '@/services/chatLogs'
+import { clearDeployBotSessionDraft } from '@/lib/deployBotSessionDraft'
 import { fetchProfile } from '@/services/profiles'
 import type { Profile } from '@/types/database'
 import type { Session, User } from '@supabase/supabase-js'
@@ -19,6 +21,8 @@ import type { Session, User } from '@supabase/supabase-js'
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null)
   const [user, setUser] = useState<User | null>(null)
+  const userRef = useRef<User | null>(null)
+  userRef.current = user
   const [profile, setProfile] = useState<Profile | null>(null)
   const [loading, setLoading] = useState(true)
   const [authError, setAuthError] = useState<string | null>(null)
@@ -120,8 +124,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signOut = useCallback(async () => {
     if (!supabase) return
+    const uid = userRef.current?.id
     setAuthError(null)
     await supabase.auth.signOut()
+    if (uid) clearDeployBotSessionDraft(uid)
   }, [])
 
   const value = useMemo<AuthContextValue>(

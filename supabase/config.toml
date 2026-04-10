@@ -1,0 +1,4 @@
+# API gateway JWT verification for Edge Functions defaults to true. This project
+# validates the caller in `requireSuperadmin()` (Bearer + auth.getUser(jwt)).
+[functions.deploy-bot]
+verify_jwt = false

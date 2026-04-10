@@ -1,9 +1,15 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { ArrowLeft } from 'lucide-react'
+import { DeployBotSecretField } from '@/components/DeployBotSecretField'
+import { useAuth } from '@/hooks/useAuth'
+import { useDeployBotSessionDraft } from '@/hooks/useDeployBotSessionDraft'
+import { clearDeployBotSessionDraft } from '@/lib/deployBotSessionDraft'
 import {
   createBotDeployment,
+  formatDeployBotInvokeMessage,
   invokeDeployBot,
+  invokeDeployBotTest,
   listBotDeployments,
   updateBotDeployment,
   type BotDeploymentWithAssignee,
@@ -25,7 +31,21 @@ function normalizeEnv(raw: DeploymentEnv): DeploymentEnv {
   return out
 }
 
+function isSecretEnvKey(key: string) {
+  return key.includes('KEY') || key.includes('TOKEN')
+}
+
+type InvokeFeedback = {
+  tone: 'success' | 'error'
+  headline: string
+  subline?: string
+  details?: string
+}
+
 export function DeployBotPage() {
+  const { user } = useAuth()
+  const userId = user?.id
+
   const [rows, setRows] = useState<BotDeploymentWithAssignee[]>([])
   const [eligible, setEligible] = useState<Profile[]>([])
   const [customerLabel, setCustomerLabel] = useState('')
@@ -34,15 +54,29 @@ export function DeployBotPage() {
   const [loading, setLoading] = useState(true)
   const [busyId, setBusyId] = useState<string | null>(null)
   const [formBusy, setFormBusy] = useState(false)
+  const [testBusy, setTestBusy] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
+  const [listError, setListError] = useState<string | null>(null)
   const [banner, setBanner] = useState<string | null>(null)
+  const [invokeFeedback, setInvokeFeedback] = useState<InvokeFeedback | null>(null)
+
+  useDeployBotSessionDraft(
+    userId,
+    customerLabel,
+    env,
+    editingId,
+    setCustomerLabel,
+    setEnv,
+    setEditingId,
+  )
 
   const refresh = useCallback(async () => {
-    const [list, clients] = await Promise.all([
+    const [listRes, clients] = await Promise.all([
       listBotDeployments(),
       fetchUnassignedUserProfiles(),
     ])
-    setRows(list)
+    setRows(listRes.rows)
+    setListError(listRes.error)
     setEligible(clients)
     setLoading(false)
   }, [])
@@ -51,11 +85,26 @@ export function DeployBotPage() {
     void refresh()
   }, [refresh])
 
+  /** Session draft can keep an editingId after rows were deleted in the DB (e.g. table cleared). */
+  useEffect(() => {
+    if (loading || !editingId) return
+    if (rows.some((r) => r.id === editingId)) return
+    setEditingId(null)
+    setFormError(
+      'The deployment you were editing is gone (e.g. table was cleared). Switched to new deployment — use Save draft to create a row.',
+    )
+  }, [loading, editingId, rows])
+
+  const clearSessionDraft = () => {
+    if (userId) clearDeployBotSessionDraft(userId)
+  }
+
   const resetForm = () => {
     setCustomerLabel('')
     setEnv(emptyEnv())
     setEditingId(null)
     setFormError(null)
+    clearSessionDraft()
   }
 
   const loadRowForEdit = (row: BotDeploymentWithAssignee) => {
@@ -68,11 +117,13 @@ export function DeployBotPage() {
     }
     setEnv(merged)
     setFormError(null)
+    setInvokeFeedback(null)
   }
 
   const handleSaveDraft = async () => {
     setFormError(null)
     setBanner(null)
+    setInvokeFeedback(null)
     const label = customerLabel.trim()
     if (!label) {
       setFormError('Customer name / label is required.')
@@ -97,12 +148,15 @@ export function DeployBotPage() {
       setBanner(`Created draft ${deployment.id.slice(0, 8)}…`)
       resetForm()
       void refresh()
+    } else {
+      setFormError('Create finished without a row. Check network and RLS (superadmin required).')
     }
   }
 
   const handleSaveAndDeploy = async () => {
     setFormError(null)
     setBanner(null)
+    setInvokeFeedback(null)
     const label = customerLabel.trim()
     if (!label) {
       setFormError('Customer name / label is required.')
@@ -121,13 +175,25 @@ export function DeployBotPage() {
           setFormError(upErr)
           return
         }
-        const { error: invErr } = await invokeDeployBot(editingId)
-        if (invErr) {
+        const inv = await invokeDeployBot(editingId)
+        if (!inv.ok) {
           await updateBotDeployment(editingId, { status: 'failed' })
-          setFormError(invErr)
+          const msg = formatDeployBotInvokeMessage(inv, 'deploy')
+          setInvokeFeedback({
+            tone: 'error',
+            headline: msg.headline,
+            subline: msg.subline,
+            details: msg.details,
+          })
           return
         }
         await updateBotDeployment(editingId, { status: 'live' })
+        const msg = formatDeployBotInvokeMessage(inv, 'deploy')
+        setInvokeFeedback({
+          tone: 'success',
+          headline: msg.headline,
+          subline: msg.subline,
+        })
         setBanner('Deploy triggered.')
         resetForm()
         void refresh()
@@ -139,13 +205,25 @@ export function DeployBotPage() {
         return
       }
       await updateBotDeployment(deployment.id, { status: 'deploying' })
-      const { error: invErr } = await invokeDeployBot(deployment.id)
-      if (invErr) {
+      const inv = await invokeDeployBot(deployment.id)
+      if (!inv.ok) {
         await updateBotDeployment(deployment.id, { status: 'failed' })
-        setFormError(invErr)
+        const msg = formatDeployBotInvokeMessage(inv, 'deploy')
+        setInvokeFeedback({
+          tone: 'error',
+          headline: msg.headline,
+          subline: msg.subline,
+          details: msg.details,
+        })
         return
       }
       await updateBotDeployment(deployment.id, { status: 'live' })
+      const msg = formatDeployBotInvokeMessage(inv, 'deploy')
+      setInvokeFeedback({
+        tone: 'success',
+        headline: msg.headline,
+        subline: msg.subline,
+      })
       setBanner('Deploy triggered.')
       resetForm()
       void refresh()
@@ -154,18 +232,52 @@ export function DeployBotPage() {
     }
   }
 
+  const handleTestN8n = async () => {
+    if (!editingId) return
+    setFormError(null)
+    setBanner(null)
+    setInvokeFeedback(null)
+    setTestBusy(true)
+    try {
+      const inv = await invokeDeployBotTest(editingId)
+      const msg = formatDeployBotInvokeMessage(inv, 'test')
+      setInvokeFeedback({
+        tone: inv.ok ? 'success' : 'error',
+        headline: msg.headline,
+        subline: msg.subline,
+        details: msg.details,
+      })
+      if (inv.ok) setBanner('n8n test webhook OK.')
+    } finally {
+      setTestBusy(false)
+    }
+  }
+
   const deployExisting = async (id: string) => {
     setBusyId(id)
     setBanner(null)
+    setInvokeFeedback(null)
     try {
       await updateBotDeployment(id, { status: 'deploying' })
-      const { error } = await invokeDeployBot(id)
-      if (error) {
+      const inv = await invokeDeployBot(id)
+      if (!inv.ok) {
         await updateBotDeployment(id, { status: 'failed' })
-        setBanner(`Deploy failed: ${error}`)
+        const msg = formatDeployBotInvokeMessage(inv, 'deploy')
+        setInvokeFeedback({
+          tone: 'error',
+          headline: msg.headline,
+          subline: msg.subline,
+          details: msg.details,
+        })
         return
       }
       await updateBotDeployment(id, { status: 'live' })
+      const msg = formatDeployBotInvokeMessage(inv, 'deploy')
+      setInvokeFeedback({
+        tone: 'success',
+        headline: msg.headline,
+        subline: msg.subline,
+      })
       setBanner('Deploy triggered.')
       void refresh()
     } finally {
@@ -173,14 +285,16 @@ export function DeployBotPage() {
     }
   }
 
-  const onAssignChange = async (rowId: string, userId: string) => {
-    const uid = userId || null
+  const onAssignChange = async (rowId: string, userIdToAssign: string) => {
+    const uid = userIdToAssign || null
     setBusyId(rowId)
     const { error } = await updateBotDeployment(rowId, { assigned_user_id: uid })
     setBusyId(null)
     if (error) setBanner(`Assign failed: ${error}`)
     else void refresh()
   }
+
+  const buttonsDisabled = formBusy || testBusy || busyId !== null
 
   return (
     <div className="flex flex-col flex-1 min-h-0 overflow-auto p-5 gap-6">
@@ -204,6 +318,31 @@ export function DeployBotPage() {
 
       {banner && (
         <p className="text-emerald-400 font-mono text-[13px] m-0 max-w-2xl">{banner}</p>
+      )}
+
+      {invokeFeedback && (
+        <div
+          className={
+            invokeFeedback.tone === 'error'
+              ? 'text-red-400 max-w-3xl'
+              : 'text-emerald-400 max-w-3xl'
+          }
+        >
+          <p className="font-mono text-[13px] m-0 font-semibold">{invokeFeedback.headline}</p>
+          {invokeFeedback.subline && (
+            <p className="text-muted text-[12px] mt-1.5 mb-0 font-sans">{invokeFeedback.subline}</p>
+          )}
+          {invokeFeedback.details ? (
+            <details className="mt-2">
+              <summary className="cursor-pointer text-[12px] font-semibold text-muted hover:text-content">
+                Response details
+              </summary>
+              <pre className="mt-2 p-3 rounded-lg bg-surface2 border border-border text-[11px] text-content overflow-x-auto whitespace-pre-wrap break-all">
+                {invokeFeedback.details}
+              </pre>
+            </details>
+          ) : null}
+        </div>
       )}
 
       <section className="bg-surface border border-border rounded-2xl p-6 max-w-3xl flex flex-col gap-4">
@@ -241,13 +380,10 @@ export function DeployBotPage() {
               <label className="font-mono text-[11px] text-muted uppercase tracking-[0.05em]">
                 {key}
               </label>
-              <input
-                type={key.includes('KEY') || key.includes('TOKEN') ? 'password' : 'text'}
+              <DeployBotSecretField
+                isSecret={isSecretEnvKey(key)}
                 value={env[key] ?? ''}
-                onChange={(e) => setEnv((prev) => ({ ...prev, [key]: e.target.value }))}
-                autoComplete="off"
-                spellCheck={false}
-                className="bg-surface2 border border-border text-content font-mono text-[13px] px-3 py-2.5 rounded-lg outline-none focus:border-accent w-full"
+                onChange={(v) => setEnv((prev) => ({ ...prev, [key]: v }))}
               />
             </div>
           ))}
@@ -255,10 +391,10 @@ export function DeployBotPage() {
 
         {formError && <p className="text-red-400 font-mono text-[12px] m-0">{formError}</p>}
 
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap gap-2 items-center">
           <button
             type="button"
-            disabled={formBusy || busyId !== null}
+            disabled={buttonsDisabled}
             onClick={() => void handleSaveDraft()}
             className="bg-surface2 border border-border text-content font-sans text-sm font-semibold px-4 py-2 rounded-lg cursor-pointer transition-all hover:border-accent hover:text-accent disabled:opacity-50"
           >
@@ -266,17 +402,34 @@ export function DeployBotPage() {
           </button>
           <button
             type="button"
-            disabled={formBusy || busyId !== null}
+            disabled={buttonsDisabled}
             onClick={() => void handleSaveAndDeploy()}
             className="bg-accent text-base border-none font-sans text-sm font-bold px-4 py-2 rounded-lg cursor-pointer hover:opacity-90 disabled:opacity-50"
           >
             {formBusy ? '…' : editingId ? 'Save & deploy' : 'Create & deploy'}
           </button>
+          <button
+            type="button"
+            disabled={buttonsDisabled || !editingId}
+            title={!editingId ? 'Save draft first to test the n8n test webhook.' : undefined}
+            onClick={() => void handleTestN8n()}
+            className="bg-surface2 border border-border text-content font-sans text-sm font-semibold px-4 py-2 rounded-lg cursor-pointer transition-all hover:border-accent hover:text-accent disabled:opacity-50"
+          >
+            {testBusy ? '…' : 'Test n8n'}
+          </button>
+          {!editingId && (
+            <span className="text-dim text-[11px] font-sans">Save draft first to enable Test n8n.</span>
+          )}
         </div>
       </section>
 
       <section className="flex flex-col gap-3 max-w-4xl">
         <h2 className="text-lg font-bold text-content m-0">Deployments</h2>
+        {listError && (
+          <p className="text-amber-400 font-mono text-[12px] m-0 max-w-2xl">
+            Could not load deployments: {listError}
+          </p>
+        )}
         {loading ? (
           <p className="text-muted text-sm m-0">Loading…</p>
         ) : rows.length === 0 ? (

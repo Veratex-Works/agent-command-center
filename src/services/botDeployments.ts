@@ -6,6 +6,7 @@ import {
 import { supabase } from '@/lib/supabase'
 import type {
   BotDeployment,
+  BotDeploymentInfra,
   BotDeploymentStatus,
   DeploymentEnv,
   Profile,
@@ -13,6 +14,26 @@ import type {
 
 export type BotDeploymentWithAssignee = BotDeployment & {
   assignee: Pick<Profile, 'id' | 'email'> | null
+  infra: BotDeploymentInfra | null
+}
+
+function parseInfraEmbed(
+  botDeploymentId: string,
+  raw: unknown,
+): BotDeploymentInfra | null {
+  if (raw == null) return null
+  const list = Array.isArray(raw) ? raw : [raw]
+  const row = list[0] as Record<string, unknown> | undefined
+  if (!row) return null
+  return {
+    bot_deployment_id: (row.bot_deployment_id as string) ?? botDeploymentId,
+    provider_vm_id: (row.provider_vm_id as string | null) ?? null,
+    vps_public_ipv4: (row.vps_public_ipv4 as string | null) ?? null,
+    agent_base_url: (row.agent_base_url as string | null) ?? null,
+    last_deployed_at: (row.last_deployed_at as string | null) ?? null,
+    last_provisioned_at: (row.last_provisioned_at as string | null) ?? null,
+    updated_at: row.updated_at as string,
+  }
 }
 
 function mapRow(row: Record<string, unknown>): BotDeployment {
@@ -34,9 +55,24 @@ export type ListBotDeploymentsResult = {
 
 export async function listBotDeployments(): Promise<ListBotDeploymentsResult> {
   if (!supabase) return { rows: [], error: null }
-  const { data, error } = await supabase
-    .from('bot_deployments')
-    .select('id, customer_label, status, assigned_user_id, deployment_env, created_at, updated_at')
+  const { data, error } = await supabase.from('bot_deployments').select(`
+      id,
+      customer_label,
+      status,
+      assigned_user_id,
+      deployment_env,
+      created_at,
+      updated_at,
+      bot_deployment_infra (
+        bot_deployment_id,
+        provider_vm_id,
+        vps_public_ipv4,
+        agent_base_url,
+        last_deployed_at,
+        last_provisioned_at,
+        updated_at
+      )
+    `)
     .order('created_at', { ascending: false })
 
   if (error) return { rows: [], error: error.message }
@@ -55,9 +91,11 @@ export async function listBotDeployments(): Promise<ListBotDeploymentsResult> {
   const rows = data.map((row) => {
     const r = row as Record<string, unknown>
     const uid = r.assigned_user_id as string | null
+    const id = r.id as string
     return {
       ...mapRow(r),
       assignee: uid ? profileById.get(uid) ?? { id: uid, email: null } : null,
+      infra: parseInfraEmbed(id, r.bot_deployment_infra),
     }
   })
   return { rows, error: null }
@@ -228,8 +266,13 @@ async function parseDeployBotInvoke(
   }
 }
 
+export type InvokeDeployBotOptions = {
+  updateStackOnly?: boolean
+}
+
 export async function invokeDeployBot(
   botDeploymentId: string,
+  options?: InvokeDeployBotOptions,
 ): Promise<DeployBotInvokeResult> {
   if (!supabase) {
     return { ok: false, stage: 'unconfigured', error: 'Supabase is not configured.' }
@@ -246,7 +289,10 @@ export async function invokeDeployBot(
     }
   }
   const { data, error } = await supabase.functions.invoke('deploy-bot', {
-    body: { botDeploymentId },
+    body: {
+      botDeploymentId,
+      ...(options?.updateStackOnly ? { updateStackOnly: true } : {}),
+    },
     headers: { Authorization: `Bearer ${token}` },
   })
   return parseDeployBotInvoke(data, error)
@@ -254,6 +300,7 @@ export async function invokeDeployBot(
 
 export async function invokeDeployBotTest(
   botDeploymentId: string,
+  options?: InvokeDeployBotOptions,
 ): Promise<DeployBotInvokeResult> {
   if (!supabase) {
     return { ok: false, stage: 'unconfigured', error: 'Supabase is not configured.' }
@@ -270,7 +317,11 @@ export async function invokeDeployBotTest(
     }
   }
   const { data, error } = await supabase.functions.invoke('deploy-bot', {
-    body: { botDeploymentId, test: true },
+    body: {
+      botDeploymentId,
+      test: true,
+      ...(options?.updateStackOnly ? { updateStackOnly: true } : {}),
+    },
     headers: { Authorization: `Bearer ${token}` },
   })
   return parseDeployBotInvoke(data, error)
@@ -333,6 +384,9 @@ export function formatDeployBotInvokeMessage(
   }
   if (result.stage === 'misconfigured') {
     return { headline: 'Edge Function is not configured.', subline: err }
+  }
+  if (result.stage === 'validation') {
+    return { headline: 'Deploy request was rejected.', subline: err, details: result.details }
   }
   if (result.stage === 'not_found') {
     return { headline: 'Deployment not found in database.', subline: err }

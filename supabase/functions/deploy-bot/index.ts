@@ -4,6 +4,8 @@ import { requireSuperadmin } from '../_shared/auth.ts'
 type DeployBody = {
   botDeploymentId?: string
   test?: boolean
+  /** When true, n8n should redeploy the stack on the existing host only (no new VPS). */
+  updateStackOnly?: boolean
 }
 
 function isTlsOrCertFailure(message: string): boolean {
@@ -43,6 +45,7 @@ Deno.serve(async (req) => {
     }
 
     const isTest = body.test === true
+    const updateStackOnly = body.updateStackOnly === true
 
     const { data: row, error } = await auth.serviceClient
       .from('bot_deployments')
@@ -55,6 +58,49 @@ Deno.serve(async (req) => {
     }
     if (!row) {
       return corsJson({ error: 'Deployment not found', stage: 'not_found' }, 404)
+    }
+
+    const { data: infraRow } = await auth.serviceClient
+      .from('bot_deployment_infra')
+      .select(
+        'provider_vm_id, vps_public_ipv4, agent_base_url, last_deployed_at, last_provisioned_at',
+      )
+      .eq('bot_deployment_id', id)
+      .maybeSingle()
+
+    const { data: providerRow } = await auth.serviceClient
+      .from('deploy_provider_settings')
+      .select('vps_api_base_url, vps_api_token')
+      .eq('id', 1)
+      .maybeSingle()
+
+    const vpsApiBaseUrl = providerRow?.vps_api_base_url?.trim() ?? ''
+    const vpsApiToken = providerRow?.vps_api_token?.trim() ?? ''
+
+    const hasStackTarget = Boolean(
+      infraRow?.agent_base_url?.trim() || infraRow?.vps_public_ipv4?.trim(),
+    )
+
+    if (updateStackOnly && !hasStackTarget) {
+      return corsJson(
+        {
+          error:
+            'updateStackOnly requires a saved agent URL or VPS IP on this deployment. Run a full provision first, or set infra in Supabase.',
+          stage: 'validation',
+        },
+        400,
+      )
+    }
+
+    if (!updateStackOnly && !vpsApiBaseUrl) {
+      return corsJson(
+        {
+          error:
+            'VPS provider API base URL is not set. Save it under Deploy bot → Provider API (stored in deploy_provider_settings).',
+          stage: 'validation',
+        },
+        400,
+      )
     }
 
     const prodHook = Deno.env.get('N8N_DEPLOY_WEBHOOK_URL')?.trim()
@@ -83,6 +129,18 @@ Deno.serve(async (req) => {
           botDeploymentId: row.id,
           customerLabel: row.customer_label,
           env: row.deployment_env ?? {},
+          updateStackOnly,
+          provider: {
+            vpsApiBaseUrl: vpsApiBaseUrl || null,
+            vpsApiToken: vpsApiToken || null,
+          },
+          infra: {
+            providerVmId: infraRow?.provider_vm_id ?? null,
+            vpsPublicIpv4: infraRow?.vps_public_ipv4 ?? null,
+            agentBaseUrl: infraRow?.agent_base_url ?? null,
+            lastDeployedAt: infraRow?.last_deployed_at ?? null,
+            lastProvisionedAt: infraRow?.last_provisioned_at ?? null,
+          },
         }),
       })
     } catch (e) {

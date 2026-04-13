@@ -45,3 +45,22 @@ export interface BotDeployment {
   created_at: string
   updated_at: string
 }
+
+/** Singleton row id=1; VPS provider API root (Hostinger, etc.). Edited on Deploy bot page. */
+export interface DeployProviderSettings {
+  id: number
+  vps_api_base_url: string | null
+  vps_api_token: string | null
+  updated_at: string
+}
+
+/** One row per bot_deployments; infra is separate from deployment_env secrets. */
+export interface BotDeploymentInfra {
+  bot_deployment_id: string
+  provider_vm_id: string | null
+  vps_public_ipv4: string | null
+  agent_base_url: string | null
+  last_deployed_at: string | null
+  last_provisioned_at: string | null
+  updated_at: string
+}

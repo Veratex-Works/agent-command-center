@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { ArrowLeft } from 'lucide-react'
 import { DeployBotSecretField } from '@/components/DeployBotSecretField'
+import { DeployProviderSettingsSection } from '@/components/DeployProviderSettingsSection'
 import { useAuth } from '@/hooks/useAuth'
 import { useDeployBotSessionDraft } from '@/hooks/useDeployBotSessionDraft'
 import { clearDeployBotSessionDraft } from '@/lib/deployBotSessionDraft'
@@ -59,6 +60,7 @@ export function DeployBotPage() {
   const [listError, setListError] = useState<string | null>(null)
   const [banner, setBanner] = useState<string | null>(null)
   const [invokeFeedback, setInvokeFeedback] = useState<InvokeFeedback | null>(null)
+  const [updateStackOnly, setUpdateStackOnly] = useState(false)
 
   useDeployBotSessionDraft(
     userId,
@@ -175,7 +177,7 @@ export function DeployBotPage() {
           setFormError(upErr)
           return
         }
-        const inv = await invokeDeployBot(editingId)
+        const inv = await invokeDeployBot(editingId, { updateStackOnly })
         if (!inv.ok) {
           await updateBotDeployment(editingId, { status: 'failed' })
           const msg = formatDeployBotInvokeMessage(inv, 'deploy')
@@ -205,7 +207,7 @@ export function DeployBotPage() {
         return
       }
       await updateBotDeployment(deployment.id, { status: 'deploying' })
-      const inv = await invokeDeployBot(deployment.id)
+      const inv = await invokeDeployBot(deployment.id, { updateStackOnly })
       if (!inv.ok) {
         await updateBotDeployment(deployment.id, { status: 'failed' })
         const msg = formatDeployBotInvokeMessage(inv, 'deploy')
@@ -239,7 +241,7 @@ export function DeployBotPage() {
     setInvokeFeedback(null)
     setTestBusy(true)
     try {
-      const inv = await invokeDeployBotTest(editingId)
+      const inv = await invokeDeployBotTest(editingId, { updateStackOnly })
       const msg = formatDeployBotInvokeMessage(inv, 'test')
       setInvokeFeedback({
         tone: inv.ok ? 'success' : 'error',
@@ -259,7 +261,7 @@ export function DeployBotPage() {
     setInvokeFeedback(null)
     try {
       await updateBotDeployment(id, { status: 'deploying' })
-      const inv = await invokeDeployBot(id)
+      const inv = await invokeDeployBot(id, { updateStackOnly })
       if (!inv.ok) {
         await updateBotDeployment(id, { status: 'failed' })
         const msg = formatDeployBotInvokeMessage(inv, 'deploy')
@@ -311,9 +313,31 @@ export function DeployBotPage() {
       <div>
         <h1 className="text-2xl font-bold text-content m-0">Deploy bot</h1>
         <p className="text-muted text-sm mt-2 mb-0 max-w-2xl">
-          Store deployment env in Supabase (superadmin only). Deploy calls an Edge Function that
-          forwards the payload to n8n (one new VPS per bot). Link unassigned client accounts below.
+          Per-bot secrets live in <code className="text-[12px]">deployment_env</code>. VPS provider
+          API URL/token and per-server metadata (IP, VM id, agent URL) live in separate tables. Deploy
+          sends everything to n8n so you can branch: full provision vs update stack only.
         </p>
+      </div>
+
+      <DeployProviderSettingsSection onSaved={() => void refresh()} />
+
+      <div className="flex flex-col gap-2 max-w-3xl">
+        <label className="flex items-start gap-2.5 text-sm text-muted cursor-pointer select-none">
+          <input
+            type="checkbox"
+            className="mt-0.5 rounded border-border"
+            checked={updateStackOnly}
+            onChange={(e) => setUpdateStackOnly(e.target.checked)}
+          />
+          <span>
+            <span className="font-semibold text-content">Update stack only</span>
+            <span className="block text-[12px] text-dim mt-0.5">
+              Skip creating a new VPS; n8n should redeploy on the existing host using{' '}
+              <code className="text-[11px]">agentBaseUrl</code> or <code className="text-[11px]">vpsPublicIpv4</code>{' '}
+              from the table below (filled after first provision via callback).
+            </span>
+          </span>
+        </label>
       </div>
 
       {banner && (
@@ -441,6 +465,7 @@ export function DeployBotPage() {
                 <tr className="bg-surface2 border-b border-border">
                   <th className="p-3 font-semibold text-muted">Label</th>
                   <th className="p-3 font-semibold text-muted">Status</th>
+                  <th className="p-3 font-semibold text-muted min-w-[100px]">Infra</th>
                   <th className="p-3 font-semibold text-muted">Assigned</th>
                   <th className="p-3 font-semibold text-muted">Link client</th>
                   <th className="p-3 font-semibold text-muted">Actions</th>
@@ -453,6 +478,22 @@ export function DeployBotPage() {
                       {row.customer_label}
                     </td>
                     <td className="p-3 text-muted align-top">{row.status}</td>
+                    <td className="p-3 text-dim align-top text-[11px] font-mono leading-snug max-w-[220px]">
+                      <div>VM: {row.infra?.provider_vm_id ?? '—'}</div>
+                      <div className="mt-1">IP: {row.infra?.vps_public_ipv4 ?? '—'}</div>
+                      <div
+                        className="mt-1 break-all text-[10px]"
+                        title={row.infra?.agent_base_url ?? undefined}
+                      >
+                        {row.infra?.agent_base_url ?? '—'}
+                      </div>
+                      <div className="mt-1 text-[10px] text-muted">
+                        Last deploy:{' '}
+                        {row.infra?.last_deployed_at
+                          ? new Date(row.infra.last_deployed_at).toLocaleString()
+                          : '—'}
+                      </div>
+                    </td>
                     <td className="p-3 text-muted align-top break-all">
                       {row.assignee?.email ?? '—'}
                     </td>

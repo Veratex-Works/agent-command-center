@@ -1,7 +1,7 @@
 {
   "name": "OpenClaw deploy bot",
   "meta": {
-    "description": "Import into n8n. Edge Function POSTs JSON: { botDeploymentId, customerLabel, env }. Replace Hostinger URL and add credentials. Add polling/SSH nodes between VPS create and docker deploy as needed."
+    "description": "Sketch only. Edge POSTs: botDeploymentId, customerLabel, env, updateStackOnly, provider { vpsApiBaseUrl, vpsApiToken }, infra { providerVmId, vpsPublicIpv4, agentBaseUrl, ... }. Add IF on updateStackOnly; use provider.* for Hostinger HTTP; use infra.agentBaseUrl for stack agent. See docs/n8n/DEPLOY_WORKFLOW.md and deploy-bot-callback for writing infra back."
   },
   "nodes": [
     {
@@ -45,6 +45,24 @@
               "name": "env",
               "value": "={{ $json.body.env ?? $json.env }}",
               "type": "object"
+            },
+            {
+              "id": "a4",
+              "name": "updateStackOnly",
+              "value": "={{ $json.body.updateStackOnly ?? $json.updateStackOnly ?? false }}",
+              "type": "boolean"
+            },
+            {
+              "id": "a5",
+              "name": "provider",
+              "value": "={{ $json.body.provider ?? $json.provider ?? {} }}",
+              "type": "object"
+            },
+            {
+              "id": "a6",
+              "name": "infra",
+              "value": "={{ $json.body.infra ?? $json.infra ?? {} }}",
+              "type": "object"
             }
           ]
         },
@@ -59,7 +77,7 @@
       "position": [720, 300],
       "parameters": {
         "method": "POST",
-        "url": "https://REPLACE_WITH_HOSTINGER_OR_PROVIDER_API",
+        "url": "={{ $json.provider.vpsApiBaseUrl }}",
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify({ label: $json.customerLabel, deploymentId: $json.botDeploymentId }) }}",
@@ -74,10 +92,10 @@
       "position": [960, 300],
       "parameters": {
         "method": "POST",
-        "url": "https://REPLACE_AFTER_VPS_HAS_PUBLIC_IP",
+        "url": "={{ $json.infra.agentBaseUrl || 'https://REPLACE_AGENT_URL' }}/deploy",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify($json.env) }}",
+        "jsonBody": "={{ JSON.stringify({ botDeploymentId: $json.botDeploymentId, customerLabel: $json.customerLabel, env: $json.env, updateStackOnly: $json.updateStackOnly }) }}",
         "options": {}
       }
     },

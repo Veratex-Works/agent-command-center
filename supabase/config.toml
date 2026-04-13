@@ -2,3 +2,6 @@
 # validates the caller in `requireSuperadmin()` (Bearer + auth.getUser(jwt)).
 [functions.deploy-bot]
 verify_jwt = false
+
+[functions.deploy-bot-callback]
+verify_jwt = false

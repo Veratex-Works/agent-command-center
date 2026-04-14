@@ -1,7 +1,7 @@
 {
   "name": "OpenClaw deploy bot",
   "meta": {
-    "description": "Sketch only. Edge POSTs: botDeploymentId, customerLabel, env, updateStackOnly, provider { vpsApiBaseUrl, vpsApiToken }, infra { providerVmId, vpsPublicIpv4, agentBaseUrl, ... }. Add IF on updateStackOnly; use provider.* for Hostinger HTTP; use infra.agentBaseUrl for stack agent. See docs/n8n/DEPLOY_WORKFLOW.md and deploy-bot-callback for writing infra back."
+    "description": "Ready to import. Webhook body matches Supabase deploy-bot. If updateStackOnly is true → POST deploy to infra.agentBaseUrl only. If false → POST provision to provider.vpsApiBaseUrl with Authorization Bearer provider.vpsApiToken, then POST deploy using the original Map payload (provision response does not include botDeploymentId/env). See docs/n8n/DEPLOY_WORKFLOW.md."
   },
   "nodes": [
     {
@@ -70,14 +70,55 @@
       }
     },
     {
+      "id": "if-update-stack",
+      "name": "If updateStackOnly",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [720, 300],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "cond-update-stack-only",
+              "leftValue": "={{ $json.updateStackOnly }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
       "id": "http-vps",
       "name": "Provision new VPS",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [720, 300],
+      "position": [960, 460],
       "parameters": {
         "method": "POST",
         "url": "={{ $json.provider.vpsApiBaseUrl }}",
+        "authentication": "none",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + ($json.provider.vpsApiToken || '') }}"
+            }
+          ]
+        },
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify({ label: $json.customerLabel, deploymentId: $json.botDeploymentId }) }}",
@@ -85,17 +126,32 @@
       }
     },
     {
-      "id": "http-docker",
-      "name": "Deploy stack on new host",
+      "id": "http-docker-update",
+      "name": "Deploy stack (update only)",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [960, 300],
+      "position": [960, 140],
       "parameters": {
         "method": "POST",
-        "url": "={{ $json.infra.agentBaseUrl || 'https://REPLACE_AGENT_URL' }}/deploy",
+        "url": "={{ $json.infra.agentBaseUrl ? new URL('/deploy', $json.infra.agentBaseUrl).href : '' }}",
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify({ botDeploymentId: $json.botDeploymentId, customerLabel: $json.customerLabel, env: $json.env, updateStackOnly: $json.updateStackOnly }) }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "http-docker-after-provision",
+      "name": "Deploy stack (after provision)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1200, 460],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Map payload').first().json.infra && $('Map payload').first().json.infra.agentBaseUrl ? new URL('/deploy', $('Map payload').first().json.infra.agentBaseUrl).href : '' }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ botDeploymentId: $('Map payload').first().json.botDeploymentId, customerLabel: $('Map payload').first().json.customerLabel, env: $('Map payload').first().json.env, updateStackOnly: $('Map payload').first().json.updateStackOnly }) }}",
         "options": {}
       }
     },
@@ -104,7 +160,7 @@
       "name": "Respond to Webhook",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.1,
-      "position": [1200, 300],
+      "position": [1440, 300],
       "parameters": {
         "respondWith": "json",
         "responseBody": "={{ { ok: true } }}",
@@ -117,12 +173,21 @@
       "main": [[{ "node": "Map payload", "type": "main", "index": 0 }]]
     },
     "Map payload": {
-      "main": [[{ "node": "Provision new VPS", "type": "main", "index": 0 }]]
+      "main": [[{ "node": "If updateStackOnly", "type": "main", "index": 0 }]]
+    },
+    "If updateStackOnly": {
+      "main": [
+        [{ "node": "Deploy stack (update only)", "type": "main", "index": 0 }],
+        [{ "node": "Provision new VPS", "type": "main", "index": 0 }]
+      ]
     },
     "Provision new VPS": {
-      "main": [[{ "node": "Deploy stack on new host", "type": "main", "index": 0 }]]
+      "main": [[{ "node": "Deploy stack (after provision)", "type": "main", "index": 0 }]]
     },
-    "Deploy stack on new host": {
+    "Deploy stack (update only)": {
+      "main": [[{ "node": "Respond to Webhook", "type": "main", "index": 0 }]]
+    },
+    "Deploy stack (after provision)": {
       "main": [[{ "node": "Respond to Webhook", "type": "main", "index": 0 }]]
     }
   },

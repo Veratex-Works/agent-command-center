@@ -5,3 +5,7 @@ verify_jwt = false
 
 [functions.deploy-bot-callback]
 verify_jwt = false
+
+# n8n (server) POSTs { secret, botDeploymentId } to load stack YAML; keeps deploy webhook body small.
+[functions.deploy-webhook-compose]
+verify_jwt = false

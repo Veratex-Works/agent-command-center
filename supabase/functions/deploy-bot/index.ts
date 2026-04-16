@@ -20,6 +20,20 @@ function isTlsOrCertFailure(message: string): boolean {
   )
 }
 
+/**
+ * n8n builds Hostinger `project_name` as `openclaw-${slug}__${botDeploymentId}` (see docs/n8n/deploy-bot-workflow.json).
+ * Two full UUID segments exceed Hostinger's 64-character limit. Send a short token for slugging only; the row still
+ * stores the full `assigned_user_id`. Uniqueness remains from `botDeploymentId` in the same string.
+ */
+function assigneeKeyForN8nSlugging(fullUserId: string | null): string | null {
+  if (fullUserId == null) return null
+  const t = fullUserId.trim()
+  if (!t) return null
+  const hex = t.replace(/-/g, '').toLowerCase().replace(/[^a-f0-9]/g, '')
+  if (hex.length >= 8) return hex.slice(0, 8)
+  return t.length <= 8 ? t : t.slice(0, 8)
+}
+
 Deno.serve(async (req) => {
   const cors = handleCors(req)
   if (cors) return cors
@@ -49,7 +63,7 @@ Deno.serve(async (req) => {
 
     const { data: row, error } = await auth.serviceClient
       .from('bot_deployments')
-      .select('id, customer_label, deployment_env')
+      .select('id, customer_label, deployment_env, assigned_user_id')
       .eq('id', id)
       .maybeSingle()
 
@@ -70,22 +84,28 @@ Deno.serve(async (req) => {
 
     const { data: providerRow } = await auth.serviceClient
       .from('deploy_provider_settings')
-      .select('vps_api_base_url, vps_api_token')
+      .select('vps_api_base_url, vps_api_token, stack_agent_bearer_token')
+      .eq('id', 1)
+      .maybeSingle()
+
+    const { data: composeRow } = await auth.serviceClient
+      .from('deploy_compose_template')
+      .select('compose_yaml')
       .eq('id', 1)
       .maybeSingle()
 
     const vpsApiBaseUrl = providerRow?.vps_api_base_url?.trim() ?? ''
     const vpsApiToken = providerRow?.vps_api_token?.trim() ?? ''
+    const stackAgentBearerToken = providerRow?.stack_agent_bearer_token?.trim() ?? ''
+    const composeYaml = composeRow?.compose_yaml?.trim() ?? ''
 
-    const hasStackTarget = Boolean(
-      infraRow?.agent_base_url?.trim() || infraRow?.vps_public_ipv4?.trim(),
-    )
+    const hasHostingerVm = Boolean(infraRow?.provider_vm_id?.trim())
 
-    if (updateStackOnly && !hasStackTarget) {
+    if (updateStackOnly && !hasHostingerVm) {
       return corsJson(
         {
           error:
-            'updateStackOnly requires a saved agent URL or VPS IP on this deployment. Run a full provision first, or set infra in Supabase.',
+            'updateStackOnly requires provider_vm_id (Hostinger virtual machine id) on this deployment. Set it in bot_deployment_infra or via deploy-bot-callback after provision.',
           stage: 'validation',
         },
         400,
@@ -100,6 +120,25 @@ Deno.serve(async (req) => {
           stage: 'validation',
         },
         400,
+      )
+    }
+
+    if (!composeYaml) {
+      return corsJson(
+        {
+          error:
+            'Docker Compose template is empty. Save the stack template under Deploy bot → Stack template (deploy_compose_template).',
+          stage: 'validation',
+        },
+        400,
+      )
+    }
+
+    const supabaseUrl = Deno.env.get('SUPABASE_URL')?.trim()
+    if (!supabaseUrl) {
+      return corsJson(
+        { error: 'SUPABASE_URL is not configured on the Edge runtime', stage: 'misconfigured' },
+        500,
       )
     }
 
@@ -122,26 +161,35 @@ Deno.serve(async (req) => {
 
     let n8nRes: Response
     try {
+      /** Stack YAML is loaded by n8n via POST deploy-webhook-compose (small webhook body). */
+      const composeFetchUrl = `${supabaseUrl.replace(/\/+$/, '')}/functions/v1/deploy-webhook-compose`
+
+      const n8nPayload = {
+        botDeploymentId: row.id,
+        customerLabel: row.customer_label,
+        assignedUserId: assigneeKeyForN8nSlugging(row.assigned_user_id ?? null),
+        composeFetchUrl,
+        env: row.deployment_env ?? {},
+        updateStackOnly,
+        stackAgent: {
+          bearerToken: stackAgentBearerToken ? stackAgentBearerToken : null,
+        },
+        provider: {
+          vpsApiBaseUrl: vpsApiBaseUrl || null,
+          vpsApiToken: vpsApiToken || null,
+        },
+        infra: {
+          providerVmId: infraRow?.provider_vm_id ?? null,
+          vpsPublicIpv4: infraRow?.vps_public_ipv4 ?? null,
+          agentBaseUrl: infraRow?.agent_base_url ?? null,
+          lastDeployedAt: infraRow?.last_deployed_at ?? null,
+          lastProvisionedAt: infraRow?.last_provisioned_at ?? null,
+        },
+      }
       n8nRes = await fetch(hook!, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          botDeploymentId: row.id,
-          customerLabel: row.customer_label,
-          env: row.deployment_env ?? {},
-          updateStackOnly,
-          provider: {
-            vpsApiBaseUrl: vpsApiBaseUrl || null,
-            vpsApiToken: vpsApiToken || null,
-          },
-          infra: {
-            providerVmId: infraRow?.provider_vm_id ?? null,
-            vpsPublicIpv4: infraRow?.vps_public_ipv4 ?? null,
-            agentBaseUrl: infraRow?.agent_base_url ?? null,
-            lastDeployedAt: infraRow?.last_deployed_at ?? null,
-            lastProvisionedAt: infraRow?.last_provisioned_at ?? null,
-          },
-        }),
+        body: JSON.stringify(n8nPayload),
       })
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)

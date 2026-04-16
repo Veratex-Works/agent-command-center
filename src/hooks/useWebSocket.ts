@@ -3,16 +3,185 @@ import { useChatStore } from '@/store/useChatStore'
 import { getDeviceIdentity, signChallenge } from '@/lib/crypto'
 import { saveDeviceToken } from '@/lib/storage'
 import { logWsChat, logWsChatRawIn } from '@/lib/websocketChatLog'
-import type { Config, GatewayPayload, HistoryEntry, HistoryMessage, ContentBlock } from '@/types'
+import type { Config, GatewayPayload, HistoryEntry, HistoryMessage } from '@/types'
 
 const LEGACY_DEFAULT_SESSION_KEY = 'agent:main:webchat:direct:user1'
 
+/** Keys often used by OpenClaw / provider payloads for human-visible copy (nested objects allowed). */
+const TEXT_LIKE_KEYS = [
+  'text',
+  'content',
+  'value',
+  'message',
+  'body',
+  'output',
+  'delta',
+  'output_text',
+  'public',
+  'parsed',
+  'reasoning',
+  'thinking',
+  'transcript',
+  'summary',
+  'result',
+  'display',
+  'reply',
+  'markdown',
+] as const
+
+function normalizeTextField(v: unknown, depth: number): string {
+  if (depth > 12 || v === null || v === undefined) return ''
+  if (typeof v === 'string') return v
+  if (typeof v === 'number' || typeof v === 'boolean') return String(v)
+  if (Array.isArray(v)) {
+    return v.map((x) => normalizeTextField(x, depth + 1)).join('')
+  }
+  if (typeof v === 'object') {
+    const o = v as Record<string, unknown>
+    let acc = ''
+    for (const k of TEXT_LIKE_KEYS) {
+      if (k in o && o[k] !== undefined) {
+        const raw = o[k]
+        if ((k === 'content' || k === 'output') && typeof raw === 'string' && !isPlausibleUserVisibleAssistantText(raw)) {
+          continue
+        }
+        acc += normalizeTextField(raw, depth + 1)
+      }
+    }
+    if (acc.trim()) return acc
+    for (const val of Object.values(o)) {
+      if (Array.isArray(val) || (typeof val === 'object' && val !== null)) {
+        acc += normalizeTextField(val, depth + 1)
+      }
+    }
+    return acc
+  }
+  return ''
+}
+
+/** Reject raw provider / HTTP payloads mistaken for assistant prose (e.g. OpenAI `choices` JSON). */
+function isPlausibleUserVisibleAssistantText(s: string): boolean {
+  const t = s.trim()
+  if (t.length < 1) return false
+  if (t.length > 120_000) return false
+  const head = t.slice(0, 4000).toLowerCase()
+  if (head.includes('"choices"')) return false
+  if (head.includes('openai-completions')) return false
+  if (head.includes('"prompt_tokens"') || head.includes('"completion_tokens"')) return false
+  if (head.includes('chatcmpl')) return false
+  if (head.includes('"finish_reason"')) return false
+  if (head.includes('"usage"') && head.includes('"completion_tokens"')) return false
+  if (/^\s*[\[{]/.test(t) && head.includes('"model"')) return false
+  const sample = t.slice(0, Math.min(t.length, 2500))
+  const jsony = (sample.match(/["{}:[\],\\]/g) ?? []).length
+  if (sample.length > 180 && jsony / sample.length > 0.22) return false
+  return true
+}
+
+/** When `__openclaw` holds prose under uncommon keys, pick the best string leaf. */
+function scoreTranscriptCandidate(s: string): number {
+  const t = s.trim()
+  if (t.length < 2) return -1
+  if (!isPlausibleUserVisibleAssistantText(t)) return -1
+  let score = Math.min(t.length, 12000)
+  if (/\s/.test(t)) score += 120
+  if (/[.!?…]/.test(t)) score += 40
+  const start = t.trimStart()
+  if (start.startsWith('{') || start.startsWith('[')) score -= 250
+  return score
+}
+
+function bestTranscriptStringDeep(node: unknown, depth: number): { text: string; score: number } {
+  if (depth > 18) return { text: '', score: -1 }
+  if (typeof node === 'string') {
+    const sc = scoreTranscriptCandidate(node)
+    return sc > 0 ? { text: node, score: sc } : { text: '', score: -1 }
+  }
+  if (Array.isArray(node)) {
+    let best: { text: string; score: number } = { text: '', score: -1 }
+    for (const el of node) {
+      const r = bestTranscriptStringDeep(el, depth + 1)
+      if (r.score > best.score) best = r
+    }
+    return best
+  }
+  if (typeof node === 'object' && node !== null) {
+    let best: { text: string; score: number } = { text: '', score: -1 }
+    for (const v of Object.values(node as Record<string, unknown>)) {
+      const r = bestTranscriptStringDeep(v, depth + 1)
+      if (r.score > best.score) best = r
+    }
+    return best
+  }
+  return { text: '', score: -1 }
+}
+
 function extractMessageText(content: HistoryMessage['content']): string {
   if (typeof content === 'string') return content
-  return content
-    .filter((block): block is ContentBlock & { text: string } => block.type === 'text' && !!block.text)
-    .map((block) => block.text)
-    .join('')
+  if (Array.isArray(content)) {
+    return content.map((block) => normalizeTextField(block, 0)).join('').trim()
+  }
+  return normalizeTextField(content, 0).trim()
+}
+
+/** Full transcript row: `content` blocks may be empty while copy lives on sibling fields. */
+function extractVisibleTextFromHistoryMessage(msg: HistoryMessage): string {
+  const strictAssistant =
+    msg.role === 'assistant' || msg.role === 'model'
+  const accept = (s: string): boolean => {
+    const t = s.trim()
+    if (!t) return false
+    if (!strictAssistant) return true
+    return isPlausibleUserVisibleAssistantText(t)
+  }
+
+  if (typeof msg.text === 'string' && accept(msg.text)) return msg.text.trim()
+  if (typeof msg.preview === 'string' && accept(msg.preview)) return msg.preview.trim()
+  const fromParts = normalizeTextField(msg.parts, 0).trim()
+  if (fromParts && accept(fromParts)) return fromParts
+  const fromPayload = normalizeTextField(msg.payload, 0).trim()
+  if (fromPayload && accept(fromPayload)) return fromPayload
+  const fromAnn = normalizeTextField(msg.annotations, 0).trim()
+  if (fromAnn && accept(fromAnn)) return fromAnn
+
+  // `api` is provider / routing metadata (often raw completion JSON) — never show it as chat.
+  const oc = msg.__openclaw
+  if (strictAssistant) {
+    const viaOcDeep = bestTranscriptStringDeep(oc, 0)
+    if (viaOcDeep.score > 0) return viaOcDeep.text.trim()
+  }
+
+  const fromBlocks = extractMessageText(msg.content)
+  if (fromBlocks && accept(fromBlocks)) return fromBlocks
+  return ''
+}
+
+/** Assistant-visible text from a `chat` event payload (some gateway builds omit `message` on `final`). */
+function extractAssistantTextFromChatPayload(p: GatewayPayload['payload'] | undefined): string {
+  if (!p) return ''
+  if (p.message) {
+    const m = p.message as HistoryMessage
+    if (m.role === 'user') return ''
+    if (m.role === 'assistant' || m.role === 'model' || m.role === undefined) {
+      return extractVisibleTextFromHistoryMessage(m)
+    }
+    return ''
+  }
+  if (p.role === 'assistant') {
+    const c = p.content
+    if (typeof c === 'string') return c
+    if (Array.isArray(c)) return extractMessageText(c as HistoryMessage['content'])
+  }
+  const fromData = p.data?.text ?? p.data?.content
+  if (typeof fromData === 'string' && fromData) return fromData
+  const msgs = p.messages
+  if (Array.isArray(msgs) && msgs.length) {
+    const lastAssistant = [...msgs]
+      .reverse()
+      .find((x) => x.role === 'assistant' || x.role === 'model')
+    if (lastAssistant) return extractVisibleTextFromHistoryMessage(lastAssistant)
+  }
+  return ''
 }
 
 
@@ -118,14 +287,15 @@ export function useWebSocket(getFallbackSessionKey?: () => string | undefined) {
       if (!messages.length) return
       store.getState().clearMessages()
       messages.forEach((msg) => {
-        // Only render user and assistant turns — skip toolResult and other internal roles
-        if (msg.role !== 'user' && msg.role !== 'assistant') return
+        const isUser = msg.role === 'user'
+        const isAssistantLike = msg.role === 'assistant' || msg.role === 'model'
+        if (!isUser && !isAssistantLike) return
 
-        const text = extractMessageText(msg.content)
+        const text = extractVisibleTextFromHistoryMessage(msg)
         if (!text) return
-        if (msg.role === 'assistant' && isHeartbeatAckText(text)) return
+        if (isAssistantLike && isHeartbeatAckText(text)) return
 
-        const role = msg.role === 'user' ? 'user' : 'bot'
+        const role = isUser ? 'user' : 'bot'
         const ts = msg.timestamp
           ? new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
           : undefined
@@ -172,25 +342,24 @@ export function useWebSocket(getFallbackSessionKey?: () => string | undefined) {
 
   const handleChatLaneEvent = useCallback(
     (payload: GatewayPayload['payload']) => {
-      if (!payload?.message || !payload.state) return
+      if (!payload?.state) return
       const { config } = store.getState()
-      if (!isPayloadForActiveSession(payload.sessionKey, config, resolveSessionKey)) return
+      const match = isPayloadForActiveSession(payload.sessionKey, config, resolveSessionKey)
+      if (!match) return
 
       const { runId, state, message } = payload
       if (runId) currentRunIdRef.current = runId
 
-      if (message.role !== 'assistant') return
-
-      const text = extractMessageText(message.content)
-
       if (state === 'delta') {
+        if (message?.role !== 'assistant' && message?.role !== 'model') return
         if (runId) chatFinalPendingRunIdRef.current = runId
         agentOnlyBufferRef.current = ''
         store.getState().setTyping(true)
         return
       }
 
-      if (state === 'final') {
+      if (state === 'final' || state === 'aborted' || state === 'error') {
+        const text = extractAssistantTextFromChatPayload(payload)
         chatFinalPendingRunIdRef.current = null
         agentOnlyBufferRef.current = ''
         streamingIdRef.current = null
@@ -201,14 +370,25 @@ export function useWebSocket(getFallbackSessionKey?: () => string | undefined) {
         if (isHeartbeatAckText(text)) return
 
         if (text) {
-          const ts = message.timestamp
-            ? new Date(message.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-            : undefined
+          const tsFromMsg = message?.timestamp
+          const ts =
+            typeof tsFromMsg === 'number'
+              ? new Date(tsFromMsg).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+              : undefined
           store.getState().addMessage({ type: 'bot', content: text, ts })
+        } else {
+          const cfg = config
+          fetchHistory(cfg)
+          queueMicrotask(() => {
+            fetchHistory(cfg)
+          })
+          requestAnimationFrame(() => {
+            fetchHistory(cfg)
+          })
         }
       }
     },
-    [store, resolveSessionKey],
+    [store, resolveSessionKey, fetchHistory],
   )
 
   const handleAgentEvent = useCallback(
@@ -301,9 +481,6 @@ export function useWebSocket(getFallbackSessionKey?: () => string | undefined) {
               signedAt,
               nonce,
             },
-            ...(resolveSessionKey(config)
-              ? { sessionKey: resolveSessionKey(config) }
-              : {}),
           },
         })
         return
@@ -374,25 +551,29 @@ export function useWebSocket(getFallbackSessionKey?: () => string | undefined) {
         return
       }
 
-      // chat.history response — new format (payload.messages)
-      if (msg.type === 'res' && msg.id?.startsWith('hist-') && msg.payload?.messages) {
-        renderHistoryMessages(msg.payload.messages)
+      // chat.history response (empty `messages: []` must not be treated as success)
+      if (msg.type === 'res' && msg.id?.startsWith('hist-')) {
+        const pl = msg.payload
+        const msgs = pl?.messages
+        const ents = pl?.entries
+        if (msgs?.length) {
+          renderHistoryMessages(msgs)
+          return
+        }
+        if (ents?.length) {
+          renderHistory(ents)
+          return
+        }
         return
       }
 
-      // chat.history response — legacy format (payload.entries)
-      if (msg.type === 'res' && msg.payload?.entries) {
-        renderHistory(msg.payload.entries)
-        return
-      }
-
-      // Chat sync lane (delta = typing only; final = one bot bubble)
-      if (msg.type === 'event' && msg.event === 'chat' && msg.payload?.state && msg.payload?.message) {
+      // Chat sync lane (delta / final / …) — `message` may be omitted on `final` in some gateway builds
+      if (msg.type === 'event' && msg.event === 'chat' && msg.payload?.state) {
         handleChatLaneEvent(msg.payload)
         return
       }
 
-      // Streaming chat events (legacy)
+      // Streaming chat events (legacy, no `state`)
       if (msg.type === 'event' && msg.event === 'chat') {
         handleChatEvent(msg.payload)
         return

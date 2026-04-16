@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { ArrowLeft } from 'lucide-react'
 import { DeployBotSecretField } from '@/components/DeployBotSecretField'
 import { DeployProviderSettingsSection } from '@/components/DeployProviderSettingsSection'
+import { DeployStackTemplateSection } from '@/components/DeployStackTemplateSection'
 import { useAuth } from '@/hooks/useAuth'
 import { useDeployBotSessionDraft } from '@/hooks/useDeployBotSessionDraft'
 import { clearDeployBotSessionDraft } from '@/lib/deployBotSessionDraft'
@@ -314,12 +315,17 @@ export function DeployBotPage() {
         <h1 className="text-2xl font-bold text-content m-0">Deploy bot</h1>
         <p className="text-muted text-sm mt-2 mb-0 max-w-2xl">
           Per-bot secrets live in <code className="text-[12px]">deployment_env</code>. VPS provider
-          API URL/token and per-server metadata (IP, VM id, agent URL) live in separate tables. Deploy
-          sends everything to n8n so you can branch: full provision vs update stack only.
+          API URL/token, global compose template, stack-agent bearer token, and per-server metadata
+          (IP, VM id, agent URL) live in separate tables. Deploy sends{' '}
+          <code className="text-[12px]">composeFetchUrl</code> and{' '}
+          <code className="text-[12px]">stackAgent</code> to n8n so the VPS agent can write files and
+          run compose; branch in n8n: full provision vs update stack only.
         </p>
       </div>
 
       <DeployProviderSettingsSection onSaved={() => void refresh()} />
+
+      <DeployStackTemplateSection onSaved={() => void refresh()} />
 
       <div className="flex flex-col gap-2 max-w-3xl">
         <label className="flex items-start gap-2.5 text-sm text-muted cursor-pointer select-none">

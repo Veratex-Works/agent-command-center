@@ -68,7 +68,7 @@ export interface GatewayPayload {
     sessionKey?: string
     ts?: number
     /** Gateway chat sync lane (`event: "chat"`). */
-    state?: 'delta' | 'final'
+    state?: 'delta' | 'final' | 'aborted' | 'error'
     message?: HistoryMessage
     /** Heartbeat indicator (`event: "heartbeat"`). */
     status?: string
@@ -99,4 +99,14 @@ export interface HistoryMessage {
   stopReason?: string
   api?: string
   provider?: string
+  /** Provider / routing metadata; sometimes holds displayable fragments when `content` is empty. */
+  api?: unknown
+  /** Some gateway builds put visible copy here when `content` is empty or tool-only. */
+  text?: string
+  preview?: string
+  parts?: unknown
+  payload?: unknown
+  annotations?: unknown
+  /** OpenClaw gateway transcript envelope when `content` is empty or tool-only. */
+  __openclaw?: unknown
 }

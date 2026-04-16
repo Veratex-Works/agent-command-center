@@ -17,6 +17,7 @@ export const router = createBrowserRouter([
         element: <MainLayout />,
         children: [
           { index: true, element: <ChatPage /> },
+          { path: 'chat', element: <ChatPage /> },
           {
             path: 'db-connection',
             element: (

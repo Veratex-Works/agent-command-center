@@ -1,0 +1,24 @@
+{
+  "env": {
+    "OPENROUTER_API_KEY": "set-via-.env-at-deploy-init-or-compose-environment"
+  },
+  "gateway": {
+    "controlUi": {
+      "allowedOrigins": [
+        "http://127.0.0.1:18789",
+        "http://localhost:18789",
+        "https://CHAT_DEMO_ORIGIN",
+        "https://CHAT_PRODUCTION_ORIGIN"
+      ],
+      "dangerouslyDisableDeviceAuth": true
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": "openrouter/openai/gpt-4o-mini",
+      "models": {
+        "openrouter/openai/gpt-4o-mini": {}
+      }
+    }
+  }
+}

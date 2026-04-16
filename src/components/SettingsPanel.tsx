@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react'
+import { useState, useEffect, type FormEvent } from 'react'
 import { X } from 'lucide-react'
 import { useAuth } from '@/hooks/useAuth'
 import { useChatStore } from '@/store/useChatStore'
@@ -34,13 +34,22 @@ function SettingsFormBody({
   const [url, setUrl] = useState(config.url)
   const [token, setToken] = useState(config.token)
   const [sessionKey, setSessionKey] = useState(config.sessionKey)
+  const [showToken, setShowToken] = useState(false)
+
+  useEffect(() => {
+    setUrl(config.url)
+    setToken(config.token)
+    setSessionKey(config.sessionKey)
+  }, [config.url, config.token, config.sessionKey])
 
   const handleClose = () => setSettingsOpen(false)
 
   const handleSave = (e: FormEvent) => {
     e.preventDefault()
     if (isRunning) onAbort()
-    const sk = sessionKeyEditable ? sessionKey.trim() : derivedSessionKey
+    const sk = sessionKeyEditable
+      ? sessionKey.trim()
+      : (config.sessionKey.trim() || derivedSessionKey)
     setConfig({ url: url.trim(), token: token.trim(), sessionKey: sk })
     setSettingsOpen(false)
     onReconnect()
@@ -78,11 +87,20 @@ function SettingsFormBody({
       </div>
 
       <div className="flex flex-col gap-1.5">
-        <label className="font-mono text-[11px] text-muted uppercase tracking-[0.05em]">
-          Auth Token <span className="text-dim normal-case">(optional)</span>
-        </label>
+        <div className="flex justify-between items-center gap-2">
+          <label className="font-mono text-[11px] text-muted uppercase tracking-[0.05em]">
+            Auth Token <span className="text-dim normal-case">(optional)</span>
+          </label>
+          <button
+            type="button"
+            onClick={() => setShowToken((v) => !v)}
+            className="font-mono text-[11px] text-accent hover:underline shrink-0"
+          >
+            {showToken ? 'Hide' : 'Show'}
+          </button>
+        </div>
         <input
-          type="password"
+          type={showToken ? 'text' : 'password'}
           value={token}
           onChange={(e) => setToken(e.target.value)}
           placeholder="your-gateway-token"
@@ -116,7 +134,7 @@ function SettingsFormBody({
           />
         ) : (
           <div className="bg-surface2 border border-border text-muted font-mono text-[13px] px-3 py-2.5 rounded-lg w-full break-all">
-            {derivedSessionKey || '—'}
+            {config.sessionKey.trim() || derivedSessionKey || '—'}
           </div>
         )}
       </div>

@@ -1,4 +1,5 @@
-import { useCallback, useEffect } from 'react'
+import { useCallback, useEffect, useMemo } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { useAuth } from '@/hooks/useAuth'
 import { useChatStore } from '@/store/useChatStore'
 import { useWebSocket } from '@/hooks/useWebSocket'
@@ -7,13 +8,18 @@ import { InputArea } from '@/components/InputArea'
 import { ConnectPrompt } from '@/components/ConnectPrompt'
 import { SettingsPanel } from '@/components/SettingsPanel'
 import { setWsChatLogSessionKeyGetter } from '@/lib/websocketChatLog'
-import { getDefaultSessionKeyForUser } from '@/lib/sessionKey'
+import { getDefaultSessionKeyForUser, sessionKeyFromSessionQueryParam } from '@/lib/sessionKey'
 import { fetchMyBotDeployment } from '@/services/botDeployments'
 
 export function ChatPage() {
   const { showConnectPrompt } = useChatStore()
   const setConfig = useChatStore((s) => s.setConfig)
   const { user, profile } = useAuth()
+  const [searchParams] = useSearchParams()
+  const sessionKeyFromUrl = useMemo(
+    () => sessionKeyFromSessionQueryParam(searchParams.get('session')),
+    [searchParams],
+  )
 
   const getFallbackSessionKey = useCallback(
     () => (user?.id ? getDefaultSessionKeyForUser(user.id) : undefined),
@@ -28,11 +34,16 @@ export function ChatPage() {
   }, [])
 
   useEffect(() => {
+    if (sessionKeyFromUrl) {
+      const c = useChatStore.getState().config
+      setConfig({ ...c, sessionKey: sessionKeyFromUrl })
+      return
+    }
     if (!user?.id || profile?.role === 'superadmin') return
     const key = getDefaultSessionKeyForUser(user.id)
     const c = useChatStore.getState().config
     setConfig({ ...c, sessionKey: key })
-  }, [user?.id, profile?.role, setConfig])
+  }, [user?.id, profile?.role, setConfig, sessionKeyFromUrl])
 
   useEffect(() => {
     if (!user?.id || profile?.role === 'superadmin') return
@@ -46,17 +57,19 @@ export function ChatPage() {
       const c = useChatStore.getState().config
       if (c.url?.trim()) return
       const token = env.OPENCLAW_GATEWAY_TOKEN?.trim() ?? ''
+      const sk =
+        sessionKeyFromUrl ?? (user.id ? getDefaultSessionKeyForUser(user.id) : c.sessionKey)
       setConfig({
         ...c,
         url,
         token,
-        sessionKey: getDefaultSessionKeyForUser(user.id),
+        sessionKey: sk,
       })
     })()
     return () => {
       cancelled = true
     }
-  }, [user?.id, profile?.role, setConfig])
+  }, [user?.id, profile?.role, setConfig, sessionKeyFromUrl])
 
   useEffect(() => {
     if (!showConnectPrompt) {

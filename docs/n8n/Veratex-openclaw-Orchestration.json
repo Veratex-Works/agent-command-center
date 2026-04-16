@@ -1,0 +1,96 @@
+{
+  "name": "Veratex-openclaw-Orchestration",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "veratex-openclaw-orchestration",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "a7e2f1c0-9d8e-4b7a-6c5d-4e3f2a1b0c9d",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        256,
+        288
+      ],
+      "webhookId": "f1e2d3c4-b5a6-9788-6655-443322110099"
+    },
+    {
+      "parameters": {
+        "jsCode": "const root = $input.first().json;\nconst body = root.body ?? root;\nconst creds =\n  typeof body.credentials === 'object' && body.credentials !== null\n    ? body.credentials\n    : {};\n\nconst userIdRaw =\n  body.user_id ?? body.userId ?? creds.user_id ?? creds.userId;\nif (\n  userIdRaw === undefined ||\n  userIdRaw === null ||\n  String(userIdRaw).trim() === ''\n) {\n  throw new Error(\n    'Missing user_id: send user_id or userId in the webhook body or credentials.',\n  );\n}\n\nfunction sanitizeSlug(s) {\n  let t = String(s)\n    .toLowerCase()\n    .replace(/[^a-z0-9._-]+/g, '-')\n    .replace(/-+/g, '-')\n    .replace(/^-|-$/g, '');\n  if (!t) t = 'user';\n  if (t.length > 48) t = t.slice(0, 48).replace(/-+$/, '');\n  return t;\n}\n\nconst slug = sanitizeSlug(userIdRaw);\n\nconst vmId = String(\n  creds.HOSTINGER_VPS_ID ?? body.HOSTINGER_VPS_ID ?? '1433354',\n);\n\nconst projectName = String(\n  creds.PROJECT_NAME ?? body.project_name ?? `veratex-openclaw-${slug}`,\n);\n\nconst containerName = `veratex_openclaw_${slug}`.replace(\n  /[^a-zA-Z0-9_.-]/g,\n  '_',\n);\n\nconst composeYaml = `services:\n  openclaw:\n    image: ghcr.io/hostinger/hvps-openclaw:latest\n    container_name: ${containerName}\n    restart: unless-stopped\n    ports:\n      - \\${PORT}:\\${PORT}\n    env_file:\n      - .env\n    volumes:\n      - ./data:/data\n      - ./gog:/usr/local/bin/gog:ro\n`;\n\nfunction formatEnvValue(val) {\n  const s = String(val ?? '');\n  if (/[\\n\\r\"#=\\s]/.test(s)) {\n    return (\n      '\"' +\n      s.replace(/\\\\/g, '\\\\\\\\').replace(/\"/g, '\\\\\"').replace(/\\n/g, '\\\\n') +\n      '\"'\n    );\n  }\n  return s;\n}\n\nconst RESERVED = new Set([\n  'HOSTINGER_VPS_ID',\n  'user_id',\n  'userId',\n  'project_name',\n  'PROJECT_NAME',\n  'container_name',\n  'credentials',\n  'env',\n]);\n\nconst merged = {};\nfunction mergeFlat(obj) {\n  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return;\n  for (const [k, v] of Object.entries(obj)) {\n    if (RESERVED.has(k)) continue;\n    if (v === undefined) continue;\n    if (typeof v === 'object' && v !== null && !Array.isArray(v)) continue;\n    merged[k] = v;\n  }\n}\n\nmergeFlat(body);\nmergeFlat(creds);\nif (body.env && typeof body.env === 'object' && !Array.isArray(body.env)) {\n  mergeFlat(body.env);\n}\n\nif (\n  !Object.prototype.hasOwnProperty.call(merged, 'PORT') ||\n  String(merged.PORT ?? '').trim() === ''\n) {\n  throw new Error(\n    'Missing PORT: Lovable must send PORT in the payload (body, credentials, or env). n8n does not set a default.',\n  );\n}\n\nconst environment = Object.keys(merged)\n  .sort()\n  .map((key) => key + '=' + formatEnvValue(merged[key]))\n  .join('\\n');\n\nreturn [\n  {\n    json: {\n      vm_id: vmId,\n      project_name: projectName,\n      content: composeYaml,\n      environment,\n    },\n  },\n];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        464,
+        288
+      ],
+      "id": "b8f3e2d1-0a9b-8c7d-6e5f-4d3c2b1a0e8f",
+      "name": "Build Hostinger Payload"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'https://developers.hostinger.com/api/vps/v1/virtual-machines/' + $json.vm_id + '/docker' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { project_name: $json.project_name, content: $json.content, environment: $json.environment } }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        640,
+        288
+      ],
+      "id": "c9a4f3e2-1b0c-9d8e-7f6a-5b4c3d2e1f0a",
+      "name": "HTTP Request"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Build Hostinger Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Hostinger Payload": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request": {
+      "main": [
+        []
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "d0e1f2a3-b4c5-d6e7-f8a9-b0c1d2e3f4a5",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "id": "e1f2a3b4-c5d6-e7f8-a9b0-c1d2e3f4a5b6",
+  "tags": []
+}

@@ -6,8 +6,11 @@ The app’s **deploy-bot** Edge Function `POST`s JSON to your n8n **Webhook** no
 {
   "botDeploymentId": "uuid",
   "customerLabel": "string",
+  "assignedUserId": "uuid | null",
+  "composeFetchUrl": "https://<project>.supabase.co/functions/v1/deploy-webhook-compose",
   "env": { "OPENCLAW_GATEWAY_URL": "…", "…": "…" },
   "updateStackOnly": false,
+  "stackAgent": { "bearerToken": "string | null" },
   "provider": {
     "vpsApiBaseUrl": "https://…",
     "vpsApiToken": "…"
@@ -15,49 +18,62 @@ The app’s **deploy-bot** Edge Function `POST`s JSON to your n8n **Webhook** no
   "infra": {
     "providerVmId": "string | null",
     "vpsPublicIpv4": "string | null",
-    "agentBaseUrl": "https://host:port | null",
+    "agentBaseUrl": "https://host | null",
     "lastDeployedAt": "ISO | null",
     "lastProvisionedAt": "ISO | null"
   }
 }
 ```
 
+The webhook body is **kept small** on purpose: the full **docker-compose** text is **not** inlined. n8n calls **`deploy-webhook-compose`** with **`N8N_COMPOSE_FETCH_SECRET`** (same value in Supabase Edge secrets and in the **n8n** server environment) and receives `{ "composeYaml": "…" }`.
+
+- **`assignedUserId`**: `bot_deployments.assigned_user_id` (client assignee). n8n uses it for **`project_name`** slug when set; otherwise falls back to **`customerLabel`** / deployment id.
 - **`env`**: stack/env for Docker (from `bot_deployments.deployment_env` only).
-- **`provider`**: from `deploy_provider_settings` (superadmin saves on Deploy bot page).
-- **`infra`**: from `bot_deployment_infra` (updated by **deploy-bot-callback** after provision/deploy).
-- **`updateStackOnly`**: when `true`, **do not** create a new VPS; call your VPS HTTP agent using `infra.agentBaseUrl` (or build URL from `infra.vpsPublicIpv4`).
+- **`composeFetchUrl`**: Edge Function URL; workflow node **Fetch stack compose** `POST`s `{ secret, botDeploymentId }` and merges **`composeYaml`** into the item before Hostinger. Template text still lives in **`deploy_compose_template`** (superadmin **Stack template**).
+- **`provider.vpsApiBaseUrl`**: must be the **API root** (no trailing slash), e.g. `https://developers.hostinger.com/api/vps/v1`, so n8n can append `/virtual-machines/{id}/docker`.
+- **`infra.providerVmId`**: required before **Hostinger Docker** deploy; set after provision via **deploy-bot-callback** or manually.
+- **`stackAgent`**: optional; only for a custom **self-hosted deploy-agent** path (not used by the default Hostinger Docker workflow).
+- **`updateStackOnly`**: when `true`, skip **Provision**; still requires **`providerVmId`** for Hostinger Docker API.
 
-## 1. Webhook → Map payload
+## 1. Webhook → Map payload → Fetch stack compose → Merge stack compose
 
-Keep a **Set** node that normalizes `body.*` onto the root (as in `deploy-bot-workflow.json`).
+1. **Set** node normalizes `body.*` onto the root (including **`composeFetchUrl`**).
+2. **HTTP Request** `POST` **`composeFetchUrl`** with JSON body  
+   `{ "secret": "<from $env.N8N_COMPOSE_FETCH_SECRET>", "botDeploymentId": "<from item>" }`.
+3. **Code** node **Merge stack compose** spreads the Map payload and sets **`composeYaml`** from the Edge response.
+
+Set **`N8N_COMPOSE_FETCH_SECRET`** on your n8n instance to the same string as the Supabase secret for **`deploy-webhook-compose`**. Deploy that Edge Function (`verify_jwt = false`; auth is the shared secret in the JSON body).
 
 ## 2. Branch on `updateStackOnly`
 
-Add an **IF** (or **Switch**) node immediately after mapping:
+After **Merge stack compose** (see [deploy-bot-workflow.json](deploy-bot-workflow.json)):
 
-- **True** (`updateStackOnly === true`): go to **“Deploy stack via agent”** (HTTP to `{{ $json.infra.agentBaseUrl }}` or your convention).
-- **False**: go to **“Provision VPS”** (HTTP to `{{ $json.provider.vpsApiBaseUrl }}` + path from Hostinger docs), then poll/wait until you have VM id + public IP.
+- **True**: **Build Hostinger Docker payload** (Code) → **Hostinger Docker API** `POST {vpsApiBaseUrl}/virtual-machines/{providerVmId}/docker` with Bearer **`provider.vpsApiToken`**.
+- **False**: **Provision new VPS** (your Hostinger provision URL) → same **Code** + **Hostinger Docker** chain.
 
-Use **Authorization: Bearer {{ $json.provider.vpsApiToken }}** on provider calls when the token is present (or use n8n credentials and ignore the body token).
+Use **Bearer `provider.vpsApiToken`** on the **Docker API** node (same token family as provision).
 
 ## 3. After provision (full path only)
 
-When the provider returns a VM id and IP:
+Persist **`providerVmId`** (and optional IP) before the Docker step:
 
-1. Optionally call **deploy-bot-callback** (see below) with `providerVmId`, `vpsPublicIpv4`, `touchLastProvisioned: true`.
-2. Continue to install Docker / set `agentBaseUrl` if your agent URL is known (e.g. `https://<ip>:8443/deploy`).
-3. Call your **static compose** agent with `{ env }` (and any fixed template version id your agent expects).
+1. Call **deploy-bot-callback** with `providerVmId`, `vpsPublicIpv4`, `touchLastProvisioned: true` (or set **`infra.provider_vm_id`** in Supabase manually).
+2. Without **`providerVmId`**, the **Code** node throws — Hostinger Docker URL cannot be built.
 
-## 4. Deploy stack (HTTP agent)
+## 4. Deploy stack (Hostinger Docker API — default)
 
-Your agent should:
+The **Code** node reads **`$('Merge stack compose').first().json`** (and the Webhook for fallbacks), builds:
 
-- Use a **fixed** `docker-compose.yml` template on the server or baked into your agent image.
-- Apply **`env`** from the webhook JSON as a **`.env`** file next to the compose (your OpenClaw service uses `env_file: .env`).
-- Run **`docker compose up -d`** (or equivalent) in that directory.
-- Return JSON success/failure to n8n.
+- **`content`** ← **`composeYaml`** (loaded in the merge step)
+- **`environment`** ← multiline string from **`env`** (dotenv-style, sorted keys)
+- **`project_name`** ← `openclaw-{slug}__{deploymentId}` where **slug** prefers **`assignedUserId`**, else **`customerLabel`**
+- **`dockerApiUrl`** ← `{vpsApiBaseUrl}/virtual-machines/{providerVmId}/docker`
 
-The Edge Function does **not** send `docker-compose.yml` content; only `env` and flags. Template changes are versioned in your agent or git, not in Supabase.
+Then **HTTP Request** posts JSON `{ project_name, content, environment }`.
+
+### 4.0 Optional: self-hosted deploy-agent
+
+Alternatively you can use **[deploy-agent](../../deploy-agent/README.md)** on the VPS (`POST /deploy`) instead of Hostinger’s Docker API; that path is not in the default JSON export anymore.
 
 ### 4.1 Network prerequisite (`bot-bridge`)
 
@@ -124,17 +140,19 @@ networks:
 
 **After deploy:** in NPM’s admin UI (port **81**), add a **Proxy Host** that terminates TLS and forwards WebSocket to `openclaw_bot:18789` (or the container name on `bot-bridge`). Point your app’s gateway URL at the public host you configure there. Automating NPM via API is optional later.
 
-**Suggested agent request body** (n8n HTTP node → your agent):
+**Agent request body** (n8n HTTP node → deploy agent):
 
 ```json
 {
   "botDeploymentId": "uuid",
   "customerLabel": "string",
-  "env": { "OPENCLAW_GATEWAY_URL": "…", "OPENCLAW_GATEWAY_TOKEN": "…" }
+  "env": { "OPENCLAW_GATEWAY_URL": "…", "OPENCLAW_GATEWAY_TOKEN": "…" },
+  "updateStackOnly": false,
+  "composeYaml": "services:\\n  …"
 }
 ```
 
-Protect the agent with HTTPS + a static bearer token or mTLS; store the token only in n8n credentials, not in Supabase.
+Protect the agent with **HTTPS** (e.g. Caddy in front). The bearer token is stored in **Supabase** (`stack_agent_bearer_token`) and forwarded in the webhook so n8n does not need a separate credential store for it (still treat the VPS `DEPLOY_AGENT_SECRET` as sensitive).
 
 ## 5. Callback to Supabase (`deploy-bot-callback`)
 
@@ -192,8 +210,8 @@ The React app may still mark a row `live` when the n8n webhook returns HTTP 2xx.
 
 ## 8. What to do next (checklist)
 
-1. **Supabase** — Migration is applied; confirm `deploy_provider_settings` has row `id = 1` and you can save **VPS API base URL** + token on Deploy bot.
-2. **Edge Functions** — Deploy `deploy-bot` and `deploy-bot-callback`; set secrets: `N8N_DEPLOY_WEBHOOK_URL`, `N8N_DEPLOY_WEBHOOK_TEST_URL` (optional), `DEPLOY_BOT_CALLBACK_SECRET`, plus usual `SUPABASE_*` for local serve.
-3. **VPS deploy agent** — Small HTTPS service (or SSH script) that: ensures `bot-bridge` → writes `.env` from JSON `env` → writes fixed `docker-compose.yml` → `docker compose up -d` → returns 200/500. Record its URL as **`agent_base_url`** via **deploy-bot-callback** after first provision so **`updateStackOnly`** runs work.
-4. **n8n** — Extend **Map payload** to pass through `updateStackOnly`, `provider`, `infra` from `body` (same pattern as `env`). Add **IF** on `updateStackOnly`. Full path: provision → callback (VM/IP/agent URL) → call agent. Stack-only path: call agent using `infra.agentBaseUrl`. On success/failure, call **deploy-bot-callback** again with `touchLastDeployed` / `deploymentStatus`.
-5. **First end-to-end test** — Save provider settings, create a draft with env filled, deploy with **Update stack only** unchecked; after VPS exists and agent URL is stored, toggle **Update stack only** and redeploy to verify the branch.
+1. **Supabase** — Migrations applied; save **VPS API** root URL (e.g. `…/api/vps/v1`) + token; **Stack template** (`deploy_compose_template`). Ensure **`bot_deployment_infra.provider_vm_id`** is set for each deployment before Hostinger Docker deploy.
+2. **Edge Functions** — Deploy `deploy-bot`, `deploy-bot-callback`, and **`deploy-webhook-compose`**; set secrets: `N8N_DEPLOY_WEBHOOK_URL`, `N8N_DEPLOY_WEBHOOK_TEST_URL` (optional), `DEPLOY_BOT_CALLBACK_SECRET`, **`N8N_COMPOSE_FETCH_SECRET`**, plus usual `SUPABASE_*` for local serve.
+3. **Hostinger** — VM exists; API token can call **`POST …/virtual-machines/{id}/docker`**. After provision, persist **`provider_vm_id`** via callback or SQL.
+4. **n8n** — Import **[deploy-bot-workflow.json](deploy-bot-workflow.json)**; set environment **`N8N_COMPOSE_FETCH_SECRET`** to match Supabase. **Fetch stack compose** → **Merge stack compose**, then **Code** builds Hostinger body; **HTTP** calls Docker API with **`provider.vpsApiToken`**. Branch on **`updateStackOnly`**.
+5. **First end-to-end test** — Assign a client (optional, for **`assignedUserId`** slug); fill **env**; deploy with **Update stack only** on only if **`provider_vm_id`** is already set.

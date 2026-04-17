@@ -1,72 +1,11 @@
-# OpenClaw gateway — copy per bot; set a unique container_name.
-# Shared network `bot-bridge` must exist: docker network create bot-bridge
-# NPM forwards WebSocket to container_name:18789.
-#
-# --- Why Hostinger / Docker UI lists 3 “containers” but only OpenClaw stays “Running” ---
-#
-# 1) openclaw-workspace-init (busybox): ONE-SHOT. It runs `chown` then exits 0. “Exited” is SUCCESS — not a dead service.
-#
-# 2) openclaw: LONG-RUNNING. This is the gateway you want healthy 24/7.
-#
-# 3) openclaw-post-deploy (profile: post-deploy): EPHEMERAL. It is NOT started by plain `docker compose up -d`.
-#    The stack deploy-agent on the VPS runs: `docker compose … run --rm openclaw-post-deploy`
-#    That starts this image, merges openclaw.json, then the container EXITS. There is no HTTP server inside it
-#    to point NPM at. Do NOT expect this row to stay “Running” in the panel.
-#
-# HTTPS “Post-deploy” from n8n → `https://<agent_base_url>/post-deploy` hits **deploy-agent** (Node on the host),
-# which shells out to `docker compose … run` above. Point DNS/NPM at deploy-agent (:8080 by default), not at this service.
-#
-# openclaw-workspace-init: Busybox one-shot — chown bind mount for UID/GID 1000 only (no openclaw.json edits).
-# Lets OpenClaw start and write its own config before any merge.
-#
-# openclaw-post-deploy (profile post-deploy): NOT started by `docker compose up -d`. Run after OpenClaw is up:
-#   docker compose -p <project> --profile post-deploy run --rm openclaw-post-deploy
-# Or use the app “Post-deploy config” button → n8n → deploy-agent POST /post-deploy.
-# Merges OPENCLAW_BASE_JSON_B64, OPENROUTER_API_KEY, gateway.auth from OPENCLAW_GATEWAY_TOKEN, controlUi
-# origins, trustedProxies union, optional agents.defaults.model when OPENROUTER_MODEL is set.
-#
-# Required in .env for post-deploy: same keys as before (OPENROUTER_API_KEY, OPENCLAW_GATEWAY_TOKEN, …).
-# Optional: OPENCLAW_GATEWAY_TRUSTED_PROXIES, OPENROUTER_MODEL, OPENCLAW_BASE_JSON_B64 (from Supabase UI).
-#
-# Security: dangerouslyDisableDeviceAuth in post-deploy merge; prefer pairing for high-threat deployments.
-#
-# CLI on the VPS: docker exec -e OPENCLAW_GATEWAY_URL=http://127.0.0.1:18789 <container> openclaw <cmd>
+-- openclaw-workspace-init: merge gateway.auth.token from OPENCLAW_GATEWAY_TOKEN when set (with existing auth keys).
+-- Deploy agent seeds openclaw/workspace/openclaw.json if missing (see deploy-agent/src/index.ts); paste updated compose from docs into Deploy bot UI or apply migrations.
 
+update public.deploy_compose_template
+set
+  compose_yaml = $compose_tpl$
 services:
   openclaw-workspace-init:
-    image: busybox:1.36
-    user: root
-    volumes:
-      - ./openclaw/workspace:/work
-    networks:
-      - bot-bridge
-    command: ['sh', '-c', 'chown -R 1000:1000 /work']
-
-  openclaw:
-    image: ghcr.io/openclaw/openclaw:latest
-    container_name: openclaw_bot__REPLACE_WITH_UNIQUE_NAME
-    restart: unless-stopped
-    depends_on:
-      openclaw-workspace-init:
-        condition: service_completed_successfully
-    networks:
-      - bot-bridge
-    env_file:
-      - .env
-    volumes:
-      - ./openclaw/workspace:/home/node/.openclaw
-    environment:
-      - OPENCLAW_GATEWAY_BIND=0.0.0.0
-      - OPENCLAW_GATEWAY_PORT=18789
-      - OPENCLAW_GATEWAY_MODE=remote
-      - OPENCLAW_GATEWAY_AUTH_MODE=token
-      - OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1
-      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
-      - OPENROUTER_MODEL=${OPENROUTER_MODEL}
-
-  openclaw-post-deploy:
-    profiles:
-      - post-deploy
     image: node:20-alpine
     user: root
     volumes:
@@ -92,6 +31,7 @@ services:
             chownR(path.join(p, ent.name));
           }
         }
+        chownR('/work');
         function expandTrustAddrs(list) {
           const s = new Set();
           const ipv4 = /^\d{1,3}(?:\.\d{1,3}){3}$/;
@@ -115,7 +55,7 @@ services:
           return s;
         }
         const trim = (s) => (s || '').trim().replace(/\r|\n/g, '');
-        const O = trim(process.env.OPENCLAW_CONTROL_UI_ORIGIN) || 'http://127.0.0.1:18789';
+        const O = trim(process.env.OPENCLAW_CONTROL_UI_ORIGIN) || 'http://127.0.0.1:54283';
         const modelRaw = trim(process.env.OPENROUTER_MODEL);
         const TP_RAW = trim(process.env.OPENCLAW_GATEWAY_TRUSTED_PROXIES);
         const trustedFromEnv = TP_RAW
@@ -132,15 +72,6 @@ services:
         } catch (_) {
           base = {};
         }
-        const b64 = trim(process.env.OPENCLAW_BASE_JSON_B64);
-        if (b64) {
-          try {
-            const dec = JSON.parse(Buffer.from(b64, 'base64').toString('utf8'));
-            if (dec && typeof dec === 'object' && !Array.isArray(dec)) {
-              base = { ...dec, ...base };
-            }
-          } catch (_) {}
-        }
         const envIn = base.env && typeof base.env === 'object' ? base.env : {};
         const gwIn = base.gateway && typeof base.gateway === 'object' ? base.gateway : {};
         const cuiIn = gwIn.controlUi && typeof gwIn.controlUi === 'object' ? gwIn.controlUi : {};
@@ -148,10 +79,8 @@ services:
         const defIn = agIn.defaults && typeof agIn.defaults === 'object' ? agIn.defaults : {};
         const origins = new Set([
           ...(Array.isArray(cuiIn.allowedOrigins) ? cuiIn.allowedOrigins : []),
-          'http://127.0.0.1:18789',
-          'http://localhost:18789',
-          'https://bot.demo-nelkode.co.za',
-          'http://localhost:5173',
+          'http://127.0.0.1:54283',
+          'http://localhost:54283',
           O,
         ]);
         const out = { ...base };
@@ -197,8 +126,32 @@ services:
         fs.writeFileSync(tmp, JSON.stringify(out) + '\n');
         fs.renameSync(tmp, target);
         fs.chownSync(target, uid, gid);
-        chownR('/work');
+
+  openclaw:
+    image: ghcr.io/openclaw/openclaw:latest
+    container_name: openclaw_bot
+    restart: unless-stopped
+    depends_on:
+      openclaw-workspace-init:
+        condition: service_completed_successfully
+    networks:
+      - bot-bridge
+    env_file:
+      - .env
+    volumes:
+      - ./openclaw/workspace:/home/node/.openclaw
+    environment:
+      - OPENCLAW_GATEWAY_BIND=0.0.0.0
+      - OPENCLAW_GATEWAY_PORT=54283
+      - OPENCLAW_GATEWAY_MODE=remote
+      - OPENCLAW_GATEWAY_AUTH_MODE=token
+      - OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - OPENROUTER_MODEL=${OPENROUTER_MODEL}
 
 networks:
   bot-bridge:
     external: true
+$compose_tpl$,
+  updated_at = now()
+where id = 1;

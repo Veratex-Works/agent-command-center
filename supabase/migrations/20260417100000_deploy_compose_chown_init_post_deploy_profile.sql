@@ -1,20 +1,10 @@
-# OpenClaw gateway — copy per bot; set a unique container_name.
+-- deploy_compose_template: openclaw-workspace-init = busybox chown only; openclaw-post-deploy (profile post-deploy) holds JSON merge (run via deploy-agent POST /post-deploy or compose run).
+
+update public.deploy_compose_template
+set
+  compose_yaml = $compose_tpl$# OpenClaw gateway — copy per bot; set a unique container_name.
 # Shared network `bot-bridge` must exist: docker network create bot-bridge
 # NPM forwards WebSocket to container_name:18789.
-#
-# --- Why Hostinger / Docker UI lists 3 “containers” but only OpenClaw stays “Running” ---
-#
-# 1) openclaw-workspace-init (busybox): ONE-SHOT. It runs `chown` then exits 0. “Exited” is SUCCESS — not a dead service.
-#
-# 2) openclaw: LONG-RUNNING. This is the gateway you want healthy 24/7.
-#
-# 3) openclaw-post-deploy (profile: post-deploy): EPHEMERAL. It is NOT started by plain `docker compose up -d`.
-#    The stack deploy-agent on the VPS runs: `docker compose … run --rm openclaw-post-deploy`
-#    That starts this image, merges openclaw.json, then the container EXITS. There is no HTTP server inside it
-#    to point NPM at. Do NOT expect this row to stay “Running” in the panel.
-#
-# HTTPS “Post-deploy” from n8n → `https://<agent_base_url>/post-deploy` hits **deploy-agent** (Node on the host),
-# which shells out to `docker compose … run` above. Point DNS/NPM at deploy-agent (:8080 by default), not at this service.
 #
 # openclaw-workspace-init: Busybox one-shot — chown bind mount for UID/GID 1000 only (no openclaw.json edits).
 # Lets OpenClaw start and write its own config before any merge.
@@ -202,3 +192,6 @@ services:
 networks:
   bot-bridge:
     external: true
+$compose_tpl$,
+  updated_at = now()
+where id = 1;

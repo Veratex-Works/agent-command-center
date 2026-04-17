@@ -87,7 +87,36 @@ deploy.example.com {
 }
 ```
 
-Reload Caddy. Set **`agent_base_url`** in `bot_deployment_infra` to **`https://deploy.example.com`** (no path).
+Reload Caddy. Set **`agent_base_url`** in `bot_deployment_infra` to **`https://deploy.example.com`** (no path) — the **deploy-agent** host, **not** `https://developers.hostinger.com/...` (that is the Hostinger API; Post-deploy would wrongly call `/api/post-deploy` and get **404**).
+
+## 5b. TLS with Nginx Proxy Manager (Docker on the same VPS)
+
+Use this if **`nginx-proxy`** (NPM) already owns ports **80 / 443** on the machine and **deploy-agent** listens on the **host** at **`127.0.0.1:8080`** (see §3–4).
+
+1. **DNS (your domain registrar, e.g. where `demo-nelkode.co.za` is managed)**  
+   Create **`A`** record: **`postdeploy.demo-nelkode.co.za`** → **the same public IPv4** as your bot / OpenClaw host (the Hostinger VPS).
+
+2. **NPM (browser → `http://<vps-ip>:81` or your NPM admin URL)**  
+   - **Hosts → Proxy Hosts → Add Proxy Host**  
+   - **Domain names:** `postdeploy.demo-nelkode.co.za`  
+   - **Scheme:** `http`  
+   - **Forward hostname / IP:** choose one that reaches the **host** from inside the NPM container:  
+     - Try **`172.17.0.1`** (default Docker bridge gateway → host on many Linux installs), **port `8080`**  
+     - If that fails, use your VPS’s real LAN IP or add **`host.docker.internal`** (Docker 20.10+ with `extra_hosts`) and forward to `host.docker.internal:8080`  
+   - **SSL:** request Let’s Encrypt certificate for the hostname; enable **Force SSL**.  
+   - **Websockets:** not required for deploy-agent JSON POSTs; optional.
+
+3. **Smoke test (your laptop terminal)**  
+   `curl -sS https://postdeploy.demo-nelkode.co.za/health` → should print `{"ok":true}`.
+
+4. **Supabase (browser → Supabase Dashboard → Table Editor)**  
+   On **`bot_deployment_infra`** for the bot row, set **`agent_base_url`** to **`https://postdeploy.demo-nelkode.co.za`** (no trailing slash, no `/api` path).
+
+5. **n8n “Build agent URL”** will call **`https://postdeploy.demo-nelkode.co.za/post-deploy`** — that must hit **deploy-agent**, which then runs **`docker compose … run --rm openclaw-post-deploy`** on the host. The **`openclaw-post-deploy` compose service** is still **not** meant to stay “Running” in Hostinger’s UI.
+
+### Why the 3rd container is not always “Running”
+
+The compose template uses **`profiles: [post-deploy]`** for **`openclaw-post-deploy`**. Normal **`docker compose up -d`** starts only **`openclaw`** (and the one-shot init). The merge container is created **on demand** when **deploy-agent** runs **`docker compose … run --rm openclaw-post-deploy`**, then it **exits**. That is by design: it is a batch job, not a public HTTP microservice.
 
 ## 6. Hostinger post-install (optional)
 

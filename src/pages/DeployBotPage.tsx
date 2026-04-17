@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { ArrowLeft } from 'lucide-react'
 import { DeployBotSecretField } from '@/components/DeployBotSecretField'
@@ -12,6 +12,7 @@ import {
   formatDeployBotInvokeMessage,
   invokeDeployBot,
   invokeDeployBotTest,
+  invokeDeployPostOpenclaw,
   listBotDeployments,
   updateBotDeployment,
   type BotDeploymentWithAssignee,
@@ -37,6 +38,25 @@ function isSecretEnvKey(key: string) {
   return key.includes('KEY') || key.includes('TOKEN')
 }
 
+function parseOpenclawBaseJsonText(
+  raw: string,
+): { ok: true; value: Record<string, unknown> | null } | { ok: false; error: string } {
+  const t = raw.trim()
+  if (!t) return { ok: true, value: null }
+  try {
+    const v = JSON.parse(t) as unknown
+    if (!v || typeof v !== 'object' || Array.isArray(v)) {
+      return {
+        ok: false,
+        error: 'Base OpenClaw JSON must be a single JSON object (not an array or primitive).',
+      }
+    }
+    return { ok: true, value: v as Record<string, unknown> }
+  } catch {
+    return { ok: false, error: 'Invalid JSON in base OpenClaw config.' }
+  }
+}
+
 type InvokeFeedback = {
   tone: 'success' | 'error'
   headline: string
@@ -55,6 +75,14 @@ export function DeployBotPage() {
   const [editingId, setEditingId] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [busyId, setBusyId] = useState<string | null>(null)
+  const [postDeployBusyId, setPostDeployBusyId] = useState<string | null>(null)
+  /** Short-lived line under table actions after Deploy / Post-deploy from the list. */
+  const [rowActionFlash, setRowActionFlash] = useState<{
+    deploymentId: string
+    tone: 'ok' | 'err'
+    text: string
+  } | null>(null)
+  const deployInvokeStatusRef = useRef<HTMLDivElement>(null)
   const [formBusy, setFormBusy] = useState(false)
   const [testBusy, setTestBusy] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
@@ -62,6 +90,7 @@ export function DeployBotPage() {
   const [banner, setBanner] = useState<string | null>(null)
   const [invokeFeedback, setInvokeFeedback] = useState<InvokeFeedback | null>(null)
   const [updateStackOnly, setUpdateStackOnly] = useState(false)
+  const [openclawBaseJsonText, setOpenclawBaseJsonText] = useState('')
 
   useDeployBotSessionDraft(
     userId,
@@ -88,6 +117,11 @@ export function DeployBotPage() {
     void refresh()
   }, [refresh])
 
+  useEffect(() => {
+    if (!invokeFeedback) return
+    deployInvokeStatusRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }, [invokeFeedback])
+
   /** Session draft can keep an editingId after rows were deleted in the DB (e.g. table cleared). */
   useEffect(() => {
     if (loading || !editingId) return
@@ -105,6 +139,7 @@ export function DeployBotPage() {
   const resetForm = () => {
     setCustomerLabel('')
     setEnv(emptyEnv())
+    setOpenclawBaseJsonText('')
     setEditingId(null)
     setFormError(null)
     clearSessionDraft()
@@ -119,6 +154,9 @@ export function DeployBotPage() {
       if (v) merged[k] = v
     }
     setEnv(merged)
+    setOpenclawBaseJsonText(
+      row.openclaw_base_json ? JSON.stringify(row.openclaw_base_json, null, 2) : '',
+    )
     setFormError(null)
     setInvokeFeedback(null)
   }
@@ -133,10 +171,16 @@ export function DeployBotPage() {
       return
     }
     const payload = normalizeEnv(env)
+    const baseParsed = parseOpenclawBaseJsonText(openclawBaseJsonText)
+    if (!baseParsed.ok) {
+      setFormError(baseParsed.error)
+      return
+    }
     if (editingId) {
       const { error } = await updateBotDeployment(editingId, {
         customer_label: label,
         deployment_env: payload,
+        openclaw_base_json: baseParsed.value,
       })
       if (error) setFormError(error)
       else {
@@ -145,7 +189,7 @@ export function DeployBotPage() {
       }
       return
     }
-    const { deployment, error } = await createBotDeployment(label, payload)
+    const { deployment, error } = await createBotDeployment(label, payload, baseParsed.value)
     if (error) setFormError(error)
     else if (deployment) {
       setBanner(`Created draft ${deployment.id.slice(0, 8)}…`)
@@ -166,12 +210,18 @@ export function DeployBotPage() {
       return
     }
     const payload = normalizeEnv(env)
+    const baseParsed = parseOpenclawBaseJsonText(openclawBaseJsonText)
+    if (!baseParsed.ok) {
+      setFormError(baseParsed.error)
+      return
+    }
     setFormBusy(true)
     try {
       if (editingId) {
         const { error: upErr } = await updateBotDeployment(editingId, {
           customer_label: label,
           deployment_env: payload,
+          openclaw_base_json: baseParsed.value,
           status: 'deploying',
         })
         if (upErr) {
@@ -202,7 +252,7 @@ export function DeployBotPage() {
         void refresh()
         return
       }
-      const { deployment, error: cErr } = await createBotDeployment(label, payload)
+      const { deployment, error: cErr } = await createBotDeployment(label, payload, baseParsed.value)
       if (cErr || !deployment) {
         setFormError(cErr ?? 'Create failed.')
         return
@@ -258,8 +308,10 @@ export function DeployBotPage() {
 
   const deployExisting = async (id: string) => {
     setBusyId(id)
+    setFormError(null)
     setBanner(null)
     setInvokeFeedback(null)
+    setRowActionFlash(null)
     try {
       await updateBotDeployment(id, { status: 'deploying' })
       const inv = await invokeDeployBot(id, { updateStackOnly })
@@ -272,6 +324,10 @@ export function DeployBotPage() {
           subline: msg.subline,
           details: msg.details,
         })
+        setRowActionFlash({ deploymentId: id, tone: 'err', text: msg.headline })
+        window.setTimeout(() => {
+          setRowActionFlash((s) => (s?.deploymentId === id ? null : s))
+        }, 12_000)
         return
       }
       await updateBotDeployment(id, { status: 'live' })
@@ -281,10 +337,47 @@ export function DeployBotPage() {
         headline: msg.headline,
         subline: msg.subline,
       })
-      setBanner('Deploy triggered.')
+      setBanner('Deploy finished — stack is live.')
+      setRowActionFlash({ deploymentId: id, tone: 'ok', text: 'Deploy succeeded.' })
+      window.setTimeout(() => {
+        setRowActionFlash((s) => (s?.deploymentId === id ? null : s))
+      }, 10_000)
       void refresh()
     } finally {
       setBusyId(null)
+    }
+  }
+
+  const postDeployExisting = async (id: string) => {
+    setPostDeployBusyId(id)
+    setFormError(null)
+    setBanner(null)
+    setInvokeFeedback(null)
+    setRowActionFlash(null)
+    try {
+      const inv = await invokeDeployPostOpenclaw(id)
+      const msg = formatDeployBotInvokeMessage(inv, 'postDeploy')
+      setInvokeFeedback({
+        tone: inv.ok ? 'success' : 'error',
+        headline: msg.headline,
+        subline: msg.subline,
+        details: msg.details,
+      })
+      if (inv.ok) {
+        setBanner('Post-deploy finished — n8n and deploy-agent reported success.')
+        setRowActionFlash({ deploymentId: id, tone: 'ok', text: 'Post-deploy succeeded.' })
+        window.setTimeout(() => {
+          setRowActionFlash((s) => (s?.deploymentId === id ? null : s))
+        }, 10_000)
+        void refresh()
+      } else {
+        setRowActionFlash({ deploymentId: id, tone: 'err', text: msg.headline })
+        window.setTimeout(() => {
+          setRowActionFlash((s) => (s?.deploymentId === id ? null : s))
+        }, 12_000)
+      }
+    } finally {
+      setPostDeployBusyId(null)
     }
   }
 
@@ -297,7 +390,7 @@ export function DeployBotPage() {
     else void refresh()
   }
 
-  const buttonsDisabled = formBusy || testBusy || busyId !== null
+  const buttonsDisabled = formBusy || testBusy || busyId !== null || postDeployBusyId !== null
 
   return (
     <div className="flex flex-col flex-1 min-h-0 overflow-auto p-5 gap-6">
@@ -316,10 +409,11 @@ export function DeployBotPage() {
         <p className="text-muted text-sm mt-2 mb-0 max-w-2xl">
           Per-bot secrets live in <code className="text-[12px]">deployment_env</code>. VPS provider
           API URL/token, global compose template, stack-agent bearer token, and per-server metadata
-          (IP, VM id, agent URL) live in separate tables. Deploy sends{' '}
-          <code className="text-[12px]">composeFetchUrl</code> and{' '}
-          <code className="text-[12px]">stackAgent</code> to n8n so the VPS agent can write files and
-          run compose; branch in n8n: full provision vs update stack only.
+          (IP, VM id, agent URL) live in separate tables. Deploy brings the stack up with a chown-only
+          init so OpenClaw can write <code className="text-[12px]">openclaw.json</code> first. Use{' '}
+          <strong className="text-content">Post-deploy config</strong> after the bot is running to merge
+          gateway origins, trusted proxies, and env-driven keys via n8n → deploy-agent{' '}
+          <code className="text-[12px]">POST /post-deploy</code>.
         </p>
       </div>
 
@@ -346,6 +440,7 @@ export function DeployBotPage() {
         </label>
       </div>
 
+      <div ref={deployInvokeStatusRef} className="flex flex-col gap-2 max-w-3xl scroll-mt-4">
       {banner && (
         <p className="text-emerald-400 font-mono text-[13px] m-0 max-w-2xl">{banner}</p>
       )}
@@ -374,6 +469,7 @@ export function DeployBotPage() {
           ) : null}
         </div>
       )}
+      </div>
 
       <section className="bg-surface border border-border rounded-2xl p-6 max-w-3xl flex flex-col gap-4">
         <div className="flex items-center justify-between gap-2 flex-wrap">
@@ -417,6 +513,27 @@ export function DeployBotPage() {
               />
             </div>
           ))}
+        </div>
+
+        <div className="flex flex-col gap-1.5">
+          <label className="font-mono text-[11px] text-muted uppercase tracking-[0.05em]">
+            Base OpenClaw JSON (optional)
+          </label>
+          <p className="text-dim text-[11px] m-0 max-w-2xl">
+            Saved on this deployment row. On deploy, n8n adds{' '}
+            <code className="text-[10px]">OPENCLAW_BASE_JSON_B64</code> to the stack{' '}
+            <code className="text-[10px]">.env</code>; <code className="text-[10px]">openclaw-workspace-init</code>{' '}
+            decodes it and merges under any existing <code className="text-[10px]">openclaw.json</code> on the VPS
+            (on-disk keys win over the base). Leave blank for compose init + deploy-agent seed only.
+          </p>
+          <textarea
+            value={openclawBaseJsonText}
+            onChange={(e) => setOpenclawBaseJsonText(e.target.value)}
+            spellCheck={false}
+            rows={10}
+            placeholder='{ "gateway": { } }'
+            className="bg-surface2 border border-border text-content font-mono text-[12px] leading-relaxed px-3 py-2.5 rounded-lg outline-none focus:border-accent w-full min-h-[160px] resize-y"
+          />
         </div>
 
         {formError && <p className="text-red-400 font-mono text-[12px] m-0">{formError}</p>}
@@ -534,23 +651,56 @@ export function DeployBotPage() {
                         </select>
                       )}
                     </td>
-                    <td className="p-3 align-top whitespace-nowrap">
-                      <button
-                        type="button"
-                        disabled={busyId !== null}
-                        onClick={() => void deployExisting(row.id)}
-                        className="text-accent text-xs font-semibold hover:underline mr-3 disabled:opacity-50"
-                      >
-                        {busyId === row.id ? '…' : 'Deploy'}
-                      </button>
-                      <button
-                        type="button"
-                        disabled={busyId !== null}
-                        onClick={() => loadRowForEdit(row)}
-                        className="text-muted text-xs font-semibold hover:text-accent"
-                      >
-                        Edit
-                      </button>
+                    <td className="p-3 align-top">
+                      <div className="flex flex-col gap-1 min-w-0">
+                        <div className="flex flex-wrap gap-x-3 gap-y-1 items-center whitespace-nowrap">
+                          <button
+                            type="button"
+                            disabled={busyId !== null || postDeployBusyId !== null}
+                            onClick={() => void deployExisting(row.id)}
+                            className="text-accent text-xs font-semibold hover:underline disabled:opacity-50"
+                          >
+                            {busyId === row.id ? '…' : 'Deploy'}
+                          </button>
+                          <button
+                            type="button"
+                            disabled={
+                              busyId !== null ||
+                              postDeployBusyId !== null ||
+                              !row.infra?.agent_base_url?.trim()
+                            }
+                            onClick={() => void postDeployExisting(row.id)}
+                            className="text-accent text-xs font-semibold hover:underline disabled:opacity-50"
+                            title={
+                              row.infra?.agent_base_url?.trim()
+                                ? 'Run OpenClaw JSON merge on the VPS (n8n → deploy-agent POST /post-deploy)'
+                                : 'Set bot_deployment_infra.agent_base_url (HTTPS deploy agent URL) first — e.g. after deploy-bot-callback or manually in Supabase.'
+                            }
+                          >
+                            {postDeployBusyId === row.id ? '…' : 'Post-deploy'}
+                          </button>
+                          <button
+                            type="button"
+                            disabled={busyId !== null || postDeployBusyId !== null}
+                            onClick={() => loadRowForEdit(row)}
+                            className="text-muted text-xs font-semibold hover:text-accent"
+                          >
+                            Edit
+                          </button>
+                        </div>
+                        {rowActionFlash?.deploymentId === row.id ? (
+                          <p
+                            className={
+                              rowActionFlash.tone === 'ok'
+                                ? 'text-emerald-400 text-[10px] font-semibold m-0 max-w-[240px] leading-snug'
+                                : 'text-red-400 text-[10px] font-semibold m-0 max-w-[240px] leading-snug'
+                            }
+                            role="status"
+                          >
+                            {rowActionFlash.text}
+                          </p>
+                        ) : null}
+                      </div>
                     </td>
                   </tr>
                 ))}

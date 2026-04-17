@@ -12,7 +12,8 @@ const SECRET = (process.env.DEPLOY_AGENT_SECRET || '').trim()
 const BASE_DIR = (process.env.DEPLOY_BASE_DIR || '/docker').trim()
 const BODY_LIMIT = Number(process.env.DEPLOY_BODY_LIMIT_BYTES || 2_000_000)
 const COMPOSE_TIMEOUT_MS = Number(process.env.DEPLOY_COMPOSE_TIMEOUT_MS || 600_000)
-/** Host bind mount for OpenClaw home; chown so the `node` user (UID 1000) in the image can write. */
+const POST_DEPLOY_TIMEOUT_MS = Number(process.env.DEPLOY_POST_DEPLOY_TIMEOUT_MS || 120_000)
+/** Host bind mount for OpenClaw home; chown so the image `node` user can write. */
 const OPENCLAW_WORKSPACE_CHOWN = (process.env.OPENCLAW_WORKSPACE_CHOWN || '1000:1000').trim()
 
 type DeployPayload = {
@@ -21,6 +22,11 @@ type DeployPayload = {
   env?: Record<string, unknown>
   composeYaml?: string
   updateStackOnly?: boolean
+}
+
+type PostDeployPayload = {
+  botDeploymentId?: string
+  customerLabel?: string
 }
 
 function extractBearer(auth: string | undefined): string | null {
@@ -109,8 +115,8 @@ function composeUsesOpenclawWorkspaceBindMount(composeYaml: string): boolean {
   return composeYaml.includes('openclaw/workspace')
 }
 
-/** Ensures bind-mounted OpenClaw data dir is writable by the container `node` user. */
-async function ensureOpenclawWorkspaceOwnership(projectRoot: string): Promise<void> {
+/** Ensures workspace dir exists and is writable by UID 1000 (compose init only chowns; no JSON here). */
+async function ensureOpenclawWorkspaceDirChowned(projectRoot: string): Promise<void> {
   const workspace = path.join(projectRoot, 'openclaw', 'workspace')
   await fs.mkdir(workspace, { recursive: true, mode: 0o755 })
   await execFileAsync('chown', ['-R', OPENCLAW_WORKSPACE_CHOWN, workspace], { timeout: 60_000 })
@@ -173,7 +179,7 @@ async function handleDeploy(req: IncomingMessage, res: ServerResponse): Promise<
     await fs.writeFile(path.join(projectRoot, '.env'), dotenv, { mode: 0o600 })
 
     if (composeUsesOpenclawWorkspaceBindMount(composeYaml)) {
-      await ensureOpenclawWorkspaceOwnership(projectRoot)
+      await ensureOpenclawWorkspaceDirChowned(projectRoot)
     }
 
     await ensureBotBridge()
@@ -194,6 +200,70 @@ async function handleDeploy(req: IncomingMessage, res: ServerResponse): Promise<
   sendJson(res, 200, { ok: true, projectDir: projectRoot, composeProject: project })
 }
 
+async function handlePostDeploy(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const token = extractBearer(req.headers.authorization)
+  if (!bearerMatches(token, SECRET)) {
+    sendJson(res, 401, { ok: false, error: 'Unauthorized' })
+    return
+  }
+
+  const parsed = await readJsonBody(req)
+  if (!parsed.ok) {
+    sendJson(res, parsed.status, { ok: false, error: parsed.message })
+    return
+  }
+
+  const body = parsed.body as PostDeployPayload
+  const botDeploymentId = body.botDeploymentId?.trim()
+  const customerLabel = body.customerLabel?.trim()
+
+  if (!botDeploymentId) {
+    sendJson(res, 400, { ok: false, error: 'botDeploymentId is required' })
+    return
+  }
+  if (!customerLabel) {
+    sendJson(res, 400, { ok: false, error: 'customerLabel is required' })
+    return
+  }
+
+  const dirName = projectDirName(customerLabel, botDeploymentId)
+  const projectRoot = path.resolve(BASE_DIR, dirName)
+  const project = composeProjectName(dirName)
+  const composePath = path.join(projectRoot, 'docker-compose.yml')
+
+  try {
+    await fs.access(composePath)
+  } catch {
+    sendJson(res, 404, { ok: false, error: 'Compose project not found on this host', projectRoot })
+    return
+  }
+
+  try {
+    await execFileAsync(
+      'docker',
+      [
+        'compose',
+        '-p',
+        project,
+        '--profile',
+        'post-deploy',
+        'run',
+        '--rm',
+        'openclaw-post-deploy',
+      ],
+      { cwd: projectRoot, timeout: POST_DEPLOY_TIMEOUT_MS, env: process.env },
+    )
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    const stderr = (e as NodeJS.ErrnoException & { stderr?: string })?.stderr
+    const detail = stderr ? `${msg}: ${stderr}`.slice(0, 2000) : msg.slice(0, 2000)
+    sendJson(res, 500, { ok: false, error: 'Post-deploy failed', detail })
+    return
+  }
+
+  sendJson(res, 200, { ok: true, projectDir: projectRoot, composeProject: project })
+}
+
 function handler(req: IncomingMessage, res: ServerResponse): void {
   const url = req.url?.split('?')[0] || '/'
 
@@ -205,6 +275,11 @@ function handler(req: IncomingMessage, res: ServerResponse): void {
 
   if (req.method === 'POST' && url === '/deploy') {
     void handleDeploy(req, res)
+    return
+  }
+
+  if (req.method === 'POST' && url === '/post-deploy') {
+    void handlePostDeploy(req, res)
     return
   }
 

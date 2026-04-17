@@ -91,7 +91,25 @@ Deno.serve(async (req) => {
       infraPatch.vps_public_ipv4 = body.vpsPublicIpv4?.trim() || null
     }
     if (body.agentBaseUrl !== undefined) {
-      infraPatch.agent_base_url = body.agentBaseUrl?.trim() || null
+      const ab = body.agentBaseUrl?.trim() || null
+      if (ab) {
+        const low = ab.toLowerCase()
+        if (
+          low.includes('developers.hostinger.com') ||
+          low.includes('/virtual-machines') ||
+          low.includes('hostinger.com/api')
+        ) {
+          return corsJson(
+            {
+              error:
+                'agentBaseUrl must be the deploy-agent HTTPS origin (e.g. https://deploy.example.com), not the Hostinger VPS API URL.',
+              stage: 'validation',
+            },
+            400,
+          )
+        }
+      }
+      infraPatch.agent_base_url = ab
     }
     if (body.touchLastDeployed === true) {
       infraPatch.last_deployed_at = now

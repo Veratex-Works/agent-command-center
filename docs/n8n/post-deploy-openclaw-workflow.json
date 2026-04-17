@@ -1,0 +1,85 @@
+{
+  "name": "OpenClaw post-deploy (agent)",
+  "meta": {
+    "description": "deploy-post-openclaw Edge Function → POST deploy-agent /post-deploy with Bearer stack token. Import in n8n; set N8N_POST_DEPLOY_WEBHOOK_URL in Supabase = this webhook URL. Requires bot_deployment_infra.agent_base_url."
+  },
+  "nodes": [
+    {
+      "id": "webhook-post",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "openclaw-post-deploy",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "code-url",
+      "name": "Build agent URL",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [480, 300],
+      "parameters": {
+        "jsCode": "function pickPayload(j) {\n  if (!j || typeof j !== 'object') return {};\n  const inner = j.body;\n  if (inner != null && typeof inner === 'object' && !Array.isArray(inner)) return inner;\n  if (typeof inner === 'string') {\n    try {\n      return JSON.parse(inner);\n    } catch {\n      return {};\n    }\n  }\n  return j;\n}\nconst b = pickPayload($input.first().json);\nconst raw = String(b.agentBaseUrl ?? b.infra?.agentBaseUrl ?? '').trim().replace(/\\/+$/, '');\nif (!raw) {\n  throw new Error(\n    'Missing agentBaseUrl. Keys on item: ' + Object.keys(b).join(', '),\n  );\n}\nconst rl = raw.toLowerCase();\nif (rl.includes('developers.hostinger.com') || rl.includes('hostinger.com/api')) {\n  throw new Error(\n    'agentBaseUrl looks like Hostinger API (' +\n      raw +\n      '), not your deploy-agent. Set bot_deployment_infra.agent_base_url to the HTTPS origin of your VPS deploy-agent (e.g. https://deploy.yourdomain.com).',\n  );\n}\nconst url = raw + '/post-deploy';\nconst token = String(b.stackAgent?.bearerToken ?? '').trim();\nif (!token) {\n  throw new Error('Missing stackAgent.bearerToken (save Stack agent bearer token in Deploy bot → Provider / stack settings).');\n}\nreturn [\n  {\n    json: {\n      postUrl: url,\n      bearerToken: token,\n      botDeploymentId: b.botDeploymentId,\n      customerLabel: b.customerLabel,\n    },\n  },\n];\n"
+      }
+    },
+    {
+      "id": "http-agent",
+      "name": "POST deploy agent",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [720, 300],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.postUrl }}",
+        "authentication": "none",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $json.bearerToken }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ botDeploymentId: $json.botDeploymentId, customerLabel: $json.customerLabel }) }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "respond-post",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [960, 300],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { ok: true } }}",
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [[{ "node": "Build agent URL", "type": "main", "index": 0 }]]
+    },
+    "Build agent URL": {
+      "main": [[{ "node": "POST deploy agent", "type": "main", "index": 0 }]]
+    },
+    "POST deploy agent": {
+      "main": [[{ "node": "Respond to Webhook", "type": "main", "index": 0 }]]
+    }
+  },
+  "pinData": {},
+  "settings": { "executionOrder": "v1" }
+}

@@ -63,7 +63,7 @@ Deno.serve(async (req) => {
 
     const { data: row, error } = await auth.serviceClient
       .from('bot_deployments')
-      .select('id, customer_label, deployment_env, assigned_user_id')
+      .select('id, customer_label, deployment_env, assigned_user_id, openclaw_base_json')
       .eq('id', id)
       .maybeSingle()
 
@@ -170,6 +170,7 @@ Deno.serve(async (req) => {
         assignedUserId: assigneeKeyForN8nSlugging(row.assigned_user_id ?? null),
         composeFetchUrl,
         env: row.deployment_env ?? {},
+        openclawBaseJson: row.openclaw_base_json ?? null,
         updateStackOnly,
         stackAgent: {
           bearerToken: stackAgentBearerToken ? stackAgentBearerToken : null,

@@ -97,10 +97,9 @@ export interface HistoryMessage {
   content: ContentBlock[] | string
   timestamp?: number
   stopReason?: string
-  api?: string
+  /** Provider / routing metadata; string or structured payload from some gateways. */
+  api?: string | unknown
   provider?: string
-  /** Provider / routing metadata; sometimes holds displayable fragments when `content` is empty. */
-  api?: unknown
   /** Some gateway builds put visible copy here when `content` is empty or tool-only. */
   text?: string
   preview?: string

@@ -9,6 +9,7 @@ The app’s **deploy-bot** Edge Function `POST`s JSON to your n8n **Webhook** no
   "assignedUserId": "uuid | null",
   "composeFetchUrl": "https://<project>.supabase.co/functions/v1/deploy-webhook-compose",
   "env": { "OPENCLAW_GATEWAY_URL": "…", "…": "…" },
+  "openclawBaseJson": null,
   "updateStackOnly": false,
   "stackAgent": { "bearerToken": "string | null" },
   "provider": {
@@ -29,6 +30,7 @@ The webhook body is **kept small** on purpose: the full **docker-compose** text 
 
 - **`assignedUserId`**: `bot_deployments.assigned_user_id` (client assignee). n8n uses it for **`project_name`** slug when set; otherwise falls back to **`customerLabel`** / deployment id.
 - **`env`**: stack/env for Docker (from `bot_deployments.deployment_env` only).
+- **`openclawBaseJson`**: optional object from `bot_deployments.openclaw_base_json`; the workflow encodes it as **`OPENCLAW_BASE_JSON_B64`** in the dotenv string. The **`openclaw-post-deploy`** service (Compose profile `post-deploy`) merges it into `openclaw.json` after OpenClaw has started — triggered from the app **Post-deploy** button via Edge Function **`deploy-post-openclaw`** and **[post-deploy-openclaw-workflow.json](post-deploy-openclaw-workflow.json)** (`N8N_POST_DEPLOY_WEBHOOK_URL` in Supabase).
 - **`composeFetchUrl`**: Edge Function URL; workflow node **Fetch stack compose** `POST`s `{ secret, botDeploymentId }` and merges **`composeYaml`** into the item before Hostinger. Template text still lives in **`deploy_compose_template`** (superadmin **Stack template**).
 - **`provider.vpsApiBaseUrl`**: must be the **API root** (no trailing slash), e.g. `https://developers.hostinger.com/api/vps/v1`, so n8n can append `/virtual-machines/{id}/docker`.
 - **`infra.providerVmId`**: required before **Hostinger Docker** deploy; set after provision via **deploy-bot-callback** or manually.
@@ -74,6 +76,24 @@ Then **HTTP Request** posts JSON `{ project_name, content, environment }`.
 ### 4.0 Optional: self-hosted deploy-agent
 
 Alternatively you can use **[deploy-agent](../../deploy-agent/README.md)** on the VPS (`POST /deploy`) instead of Hostinger’s Docker API; that path is not in the default JSON export anymore.
+
+### 4.0.1 Post-deploy (`openclaw.json` merge)
+
+After the stack is **live** and OpenClaw has written its config:
+
+1. Superadmin: **Deploy bot → Post-deploy** on a row (requires **`bot_deployment_infra.agent_base_url`** pointing at the deploy agent, e.g. `https://deploy.example.com`).
+2. Supabase Edge **`deploy-post-openclaw`** (secret **`N8N_POST_DEPLOY_WEBHOOK_URL`**) calls n8n; **[post-deploy-openclaw-workflow.json](post-deploy-openclaw-workflow.json)** `POST`s **`{agentBaseUrl}/post-deploy`** with **`Authorization: Bearer <stack_agent_bearer_token>`**.
+3. Deploy agent runs **`docker compose --profile post-deploy run --rm openclaw-post-deploy`** in the project directory (same **`botDeploymentId`** / **`customerLabel`** slug as deploy).
+
+Re-import the workflow and set **`N8N_POST_DEPLOY_WEBHOOK_URL`** alongside the existing deploy webhook secrets.
+
+**Post-deploy not firing (checklist)**
+
+1. **Edge Function deployed** — `supabase functions deploy deploy-post-openclaw` (Cloud Dashboard shows it under Edge Functions). Until it exists, the app button hits a missing URL / relay error.
+2. **Secret + redeploy** — Add **`N8N_POST_DEPLOY_WEBHOOK_URL`** in **Project Settings → Edge Functions → Secrets** (exact name), then **redeploy** `deploy-post-openclaw`. New secrets are not always visible to already-running revisions.
+3. **`agent_base_url`** — The row must have **`bot_deployment_infra.agent_base_url`** set to the **HTTPS origin of your deploy-agent** on the VPS (e.g. `https://deploy.example.com` — the same host that serves `POST /deploy` and `POST /post-deploy`). **Do not** put the Hostinger developers API URL here (e.g. `https://developers.hostinger.com/api/...`); that causes n8n to call `…/api/post-deploy` and return **404**. Without a correct URL the Edge returns **400** or the UI disables **Post-deploy**.
+4. **n8n URL** — Use the **production** webhook URL from the active workflow (often **Webhook** node → **Production URL**), not the test URL, unless you set the secret to the test URL on purpose.
+5. **Stack agent token** — **`stack_agent_bearer_token`** in `deploy_provider_settings` must match **`DEPLOY_AGENT_SECRET`** on the VPS; otherwise the n8n **POST deploy agent** step fails.
 
 ### 4.1 Network prerequisite (`bot-bridge`)
 

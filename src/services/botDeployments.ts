@@ -37,12 +37,16 @@ function parseInfraEmbed(
 }
 
 function mapRow(row: Record<string, unknown>): BotDeployment {
+  const oj = row.openclaw_base_json
+  const openclaw_base_json =
+    oj && typeof oj === 'object' && !Array.isArray(oj) ? (oj as Record<string, unknown>) : null
   return {
     id: row.id as string,
     customer_label: row.customer_label as string,
     status: row.status as BotDeployment['status'],
     assigned_user_id: (row.assigned_user_id as string | null) ?? null,
     deployment_env: (row.deployment_env as DeploymentEnv) ?? {},
+    openclaw_base_json,
     created_at: row.created_at as string,
     updated_at: row.updated_at as string,
   }
@@ -61,6 +65,7 @@ export async function listBotDeployments(): Promise<ListBotDeploymentsResult> {
       status,
       assigned_user_id,
       deployment_env,
+      openclaw_base_json,
       created_at,
       updated_at,
       bot_deployment_infra (
@@ -104,6 +109,7 @@ export async function listBotDeployments(): Promise<ListBotDeploymentsResult> {
 export async function createBotDeployment(
   customerLabel: string,
   deploymentEnv: DeploymentEnv,
+  openclawBaseJson?: Record<string, unknown> | null,
 ): Promise<{ deployment: BotDeployment | null; error: string | null }> {
   if (!supabase) return { deployment: null, error: 'Supabase is not configured.' }
   const { data, error } = await supabase
@@ -112,6 +118,7 @@ export async function createBotDeployment(
       customer_label: customerLabel.trim(),
       status: 'draft',
       deployment_env: deploymentEnv,
+      openclaw_base_json: openclawBaseJson ?? null,
     })
     .select()
     .single()
@@ -134,6 +141,7 @@ export async function updateBotDeployment(
     status: BotDeploymentStatus
     assigned_user_id: string | null | undefined
     deployment_env: DeploymentEnv
+    openclaw_base_json: Record<string, unknown> | null
   }>,
 ): Promise<{ error: string | null }> {
   if (!supabase) return { error: 'Supabase is not configured.' }
@@ -298,6 +306,28 @@ export async function invokeDeployBot(
   return parseDeployBotInvoke(data, error)
 }
 
+export async function invokeDeployPostOpenclaw(botDeploymentId: string): Promise<DeployBotInvokeResult> {
+  if (!supabase) {
+    return { ok: false, stage: 'unconfigured', error: 'Supabase is not configured.' }
+  }
+  const {
+    data: { session },
+  } = await supabase.auth.getSession()
+  const token = session?.access_token?.trim()
+  if (!token) {
+    return {
+      ok: false,
+      stage: 'unauthorized',
+      error: 'No active session. Sign in again to run post-deploy.',
+    }
+  }
+  const { data, error } = await supabase.functions.invoke('deploy-post-openclaw', {
+    body: { botDeploymentId },
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  return parseDeployBotInvoke(data, error)
+}
+
 export async function invokeDeployBotTest(
   botDeploymentId: string,
   options?: InvokeDeployBotOptions,
@@ -327,10 +357,10 @@ export async function invokeDeployBotTest(
   return parseDeployBotInvoke(data, error)
 }
 
-/** User-facing lines for deploy / test webhook outcomes (superadmin UI). */
+/** User-facing lines for deploy / test / post-deploy webhook outcomes (superadmin UI). */
 export function formatDeployBotInvokeMessage(
   result: DeployBotInvokeResult,
-  mode: 'deploy' | 'test',
+  mode: 'deploy' | 'test' | 'postDeploy',
 ): { headline: string; subline?: string; details?: string } {
   if (result.ok) {
     if (mode === 'test' || result.stage === 'n8n_test_ok') {
@@ -338,6 +368,13 @@ export function formatDeployBotInvokeMessage(
         headline: 'Test webhook succeeded.',
         subline:
           'The Edge Function ran and the n8n test URL returned a successful HTTP response.',
+      }
+    }
+    if (mode === 'postDeploy') {
+      return {
+        headline: 'Post-deploy job finished.',
+        subline:
+          'n8n called the deploy agent; the OpenClaw post-deploy merge container should have updated openclaw.json.',
       }
     }
     return {
@@ -372,21 +409,41 @@ export function formatDeployBotInvokeMessage(
     }
   }
   if (result.stage === 'fetch_error') {
+    const fnHint =
+      mode === 'postDeploy'
+        ? 'Run `supabase functions deploy deploy-post-openclaw` for the same Supabase project as `VITE_SUPABASE_URL`.'
+        : 'Run `supabase functions deploy deploy-bot` for the same project as `VITE_SUPABASE_URL`.'
     return {
       headline: 'Could not reach the Edge Function.',
       subline:
-        'If the console shows a CORS error on the preflight (OPTIONS), the response was not HTTP 2xx—often the function is not deployed at that URL yet (Supabase returns 404 without full CORS). Run `supabase functions deploy deploy-bot` for the same project as `VITE_SUPABASE_URL`, set secrets, then retry. Also verify local `supabase start`, VPN/firewall, and extensions.',
+        `If the console shows a CORS error on the preflight (OPTIONS), the response was often not HTTP 2xx (e.g. function missing). ${fnHint} Set secrets, redeploy, then retry. Also verify VPN/firewall and extensions.`,
       details: result.details,
     }
   }
   if (result.stage === 'relay_error') {
-    return { headline: 'Edge Function relay error.', subline: err }
+    return {
+      headline: 'Edge Function relay error.',
+      subline: err,
+      details:
+        /not\s+found|does\s+not\s+exist|404/i.test(err)
+          ? 'Often the function was never deployed: run `supabase functions deploy deploy-post-openclaw` for the same project as the app.'
+          : result.details,
+    }
   }
   if (result.stage === 'misconfigured') {
-    return { headline: 'Edge Function is not configured.', subline: err }
+    return {
+      headline: 'Post-deploy Edge Function is not configured.',
+      subline: err,
+      details:
+        'Set N8N_POST_DEPLOY_WEBHOOK_URL in Supabase (Dashboard → Project Settings → Edge Functions → Secrets), then redeploy deploy-post-openclaw so the runtime picks up the secret.',
+    }
   }
   if (result.stage === 'validation') {
-    return { headline: 'Deploy request was rejected.', subline: err, details: result.details }
+    return {
+      headline: mode === 'postDeploy' ? 'Post-deploy was rejected.' : 'Deploy request was rejected.',
+      subline: err,
+      details: result.details,
+    }
   }
   if (result.stage === 'not_found') {
     return { headline: 'Deployment not found in database.', subline: err }

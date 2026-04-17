@@ -46,6 +46,8 @@ export interface BotDeployment {
   status: BotDeploymentStatus
   assigned_user_id: string | null
   deployment_env: DeploymentEnv
+  /** Optional OpenClaw config merged before compose (n8n encodes as OPENCLAW_BASE_JSON_B64 in deploy .env). */
+  openclaw_base_json: Record<string, unknown> | null
   created_at: string
   updated_at: string
 }

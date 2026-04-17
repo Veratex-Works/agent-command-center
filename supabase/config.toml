@@ -9,3 +9,7 @@ verify_jwt = false
 # n8n (server) POSTs { secret, botDeploymentId } to load stack YAML; keeps deploy webhook body small.
 [functions.deploy-webhook-compose]
 verify_jwt = false
+
+# Superadmin “Post-deploy config” → n8n → deploy-agent POST /post-deploy (OpenClaw merge job).
+[functions.deploy-post-openclaw]
+verify_jwt = false

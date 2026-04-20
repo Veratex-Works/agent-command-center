@@ -145,7 +145,26 @@ async function handleDeploy(req: IncomingMessage, res: ServerResponse): Promise<
   const botDeploymentId = body.botDeploymentId?.trim()
   const customerLabel = body.customerLabel?.trim()
   const composeYaml = body.composeYaml?.trim()
-  const env = body.env && typeof body.env === 'object' && !Array.isArray(body.env) ? body.env : {}
+  const env: Record<string, unknown> =
+    body.env && typeof body.env === 'object' && !Array.isArray(body.env) ? { ...body.env } : {}
+  if (SECRET) {
+    const existing = env['STACK_AGENT_BEARER_TOKEN']
+    const missing =
+      typeof existing !== 'string' || existing.trim() === ''
+    if (missing) {
+      env['STACK_AGENT_BEARER_TOKEN'] = SECRET
+    }
+  }
+
+  const defaultHookImage = (process.env.DEFAULT_OPENCLAW_STACK_HOOK_IMAGE || '').trim()
+  if (defaultHookImage) {
+    const hi = env['OPENCLAW_STACK_HOOK_IMAGE']
+    const hookMissing =
+      typeof hi !== 'string' || hi.trim() === ''
+    if (hookMissing) {
+      env['OPENCLAW_STACK_HOOK_IMAGE'] = defaultHookImage
+    }
+  }
 
   if (!botDeploymentId) {
     sendJson(res, 400, { ok: false, error: 'botDeploymentId is required' })

@@ -164,12 +164,37 @@ Deno.serve(async (req) => {
       /** Stack YAML is loaded by n8n via POST deploy-webhook-compose (small webhook body). */
       const composeFetchUrl = `${supabaseUrl.replace(/\/+$/, '')}/functions/v1/deploy-webhook-compose`
 
+      const baseEnv =
+        row.deployment_env &&
+        typeof row.deployment_env === 'object' &&
+        !Array.isArray(row.deployment_env)
+          ? { ...(row.deployment_env as Record<string, unknown>) }
+          : {}
+      const existingToken = (baseEnv as Record<string, unknown>)['STACK_AGENT_BEARER_TOKEN']
+      const stackTokenMissing =
+        existingToken === undefined ||
+        existingToken === null ||
+        (typeof existingToken === 'string' && existingToken.trim() === '')
+      if (stackAgentBearerToken && stackTokenMissing) {
+        ;(baseEnv as Record<string, string>)['STACK_AGENT_BEARER_TOKEN'] = stackAgentBearerToken
+      }
+
+      const defaultHookImage = Deno.env.get('DEFAULT_OPENCLAW_STACK_HOOK_IMAGE')?.trim() ?? ''
+      const existingHook = (baseEnv as Record<string, unknown>)['OPENCLAW_STACK_HOOK_IMAGE']
+      const hookImageMissing =
+        existingHook === undefined ||
+        existingHook === null ||
+        (typeof existingHook === 'string' && existingHook.trim() === '')
+      if (defaultHookImage && hookImageMissing) {
+        ;(baseEnv as Record<string, string>)['OPENCLAW_STACK_HOOK_IMAGE'] = defaultHookImage
+      }
+
       const n8nPayload = {
         botDeploymentId: row.id,
         customerLabel: row.customer_label,
         assignedUserId: assigneeKeyForN8nSlugging(row.assigned_user_id ?? null),
         composeFetchUrl,
-        env: row.deployment_env ?? {},
+        env: baseEnv,
         openclawBaseJson: row.openclaw_base_json ?? null,
         updateStackOnly,
         stackAgent: {

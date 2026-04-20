@@ -1,7 +1,7 @@
 {
   "name": "OpenClaw post-deploy (agent)",
   "meta": {
-    "description": "deploy-post-openclaw Edge Function → POST deploy-agent /post-deploy with Bearer stack token. Import in n8n; set N8N_POST_DEPLOY_WEBHOOK_URL in Supabase = this webhook URL. Requires bot_deployment_infra.agent_base_url."
+    "description": "deploy-post-openclaw Edge Function → POST {agent_base_url}/post-deploy (in-stack openclaw-post-deploy-hook behind NPM, or self-hosted deploy-agent). Bearer = stack_agent_bearer_token. Set N8N_POST_DEPLOY_WEBHOOK_URL in Supabase to this webhook’s production URL."
   },
   "nodes": [
     {

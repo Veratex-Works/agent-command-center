@@ -73,17 +73,28 @@ The **Code** node reads **`$('Merge stack compose').first().json`** (and the Web
 
 Then **HTTP Request** posts JSON `{ project_name, content, environment }`.
 
+### 4.0 Hostinger `content` size (8192 characters)
+
+Hostinger’s `POST …/virtual-machines/{id}/docker` body rejects **`content`** (the compose YAML) larger than **8192** bytes. The stack template keeps the hook out of inline `node -e` scripts: **`openclaw-post-deploy-hook`** uses **`image: ${OPENCLAW_STACK_HOOK_IMAGE}`**. Build and push the image from **`packages/openclaw-stack-hook`** (`Dockerfile` + `server.mjs`) to your registry, then either:
+
+- put **`OPENCLAW_STACK_HOOK_IMAGE`** (e.g. `ghcr.io/your-org/openclaw-stack-hook:1`) on each deployment’s **`deployment_env`**, or  
+- set Supabase Edge secret **`DEFAULT_OPENCLAW_STACK_HOOK_IMAGE`** to that image reference and **redeploy** the **`deploy-bot`** Edge Function — **`deploy-bot`** injects it when **`deployment_env`** does not already define the key.
+
 ### 4.0 Optional: self-hosted deploy-agent
 
 Alternatively you can use **[deploy-agent](../../deploy-agent/README.md)** on the VPS (`POST /deploy`) instead of Hostinger’s Docker API; that path is not in the default JSON export anymore.
 
 ### 4.0.1 Post-deploy (`openclaw.json` merge)
 
+The stack template adds **`openclaw-post-deploy-hook`** (always on): container **`OPENCLAW_STACK_HOOK_IMAGE`** listens on **port 18790** and implements **`POST /post-deploy`** (Bearer **`STACK_AGENT_BEARER_TOKEN`**, same value as **Stack agent bearer token** in Supabase). The **`deploy-bot`** Edge Function injects that bearer token (and optionally the hook image via **`DEFAULT_OPENCLAW_STACK_HOOK_IMAGE`**) into the Hostinger **`environment`** string when missing from **`deployment_env`**.
+
 After the stack is **live** and OpenClaw has written its config:
 
-1. Superadmin: **Deploy bot → Post-deploy** on a row (requires **`bot_deployment_infra.agent_base_url`** pointing at the deploy agent, e.g. `https://deploy.example.com`).
-2. Supabase Edge **`deploy-post-openclaw`** (secret **`N8N_POST_DEPLOY_WEBHOOK_URL`**) calls n8n; **[post-deploy-openclaw-workflow.json](post-deploy-openclaw-workflow.json)** `POST`s **`{agentBaseUrl}/post-deploy`** with **`Authorization: Bearer <stack_agent_bearer_token>`**.
-3. Deploy agent runs **`docker compose --profile post-deploy run --rm openclaw-post-deploy`** in the project directory (same **`botDeploymentId`** / **`customerLabel`** slug as deploy).
+1. **Nginx Proxy Manager (or similar)** on the VPS: add a **Proxy Host** whose **upstream** is **`<vps-lan-ip>:18790`** (or the published host port if you mapped `OPENCLAW_STACK_HOOK_PORT`), TLS on the public hostname you want (e.g. `https://hooks.customer.example`).
+2. In **Supabase** (Table Editor or SQL), set **`bot_deployment_infra.agent_base_url`** for that deployment to that **HTTPS origin only** (no path), e.g. `https://hooks.customer.example`.
+3. Superadmin: **Deploy bot → Post-deploy** on the row. Edge **`deploy-post-openclaw`** → n8n → **`POST {agent_base_url}/post-deploy`** with the bearer token.
+
+If you **do** run **deploy-agent** on the host instead, set **`agent_base_url`** to that agent’s HTTPS origin; the agent still runs **`docker compose --profile post-deploy run --rm openclaw-post-deploy`**, which is now a thin **`curl`** into the hook (merge logic stays in one place).
 
 Re-import the workflow and set **`N8N_POST_DEPLOY_WEBHOOK_URL`** alongside the existing deploy webhook secrets.
 
@@ -91,9 +102,9 @@ Re-import the workflow and set **`N8N_POST_DEPLOY_WEBHOOK_URL`** alongside the e
 
 1. **Edge Function deployed** — `supabase functions deploy deploy-post-openclaw` (Cloud Dashboard shows it under Edge Functions). Until it exists, the app button hits a missing URL / relay error.
 2. **Secret + redeploy** — Add **`N8N_POST_DEPLOY_WEBHOOK_URL`** in **Project Settings → Edge Functions → Secrets** (exact name), then **redeploy** `deploy-post-openclaw`. New secrets are not always visible to already-running revisions.
-3. **`agent_base_url`** — The row must have **`bot_deployment_infra.agent_base_url`** set to the **HTTPS origin of your deploy-agent** on the VPS (e.g. `https://deploy.example.com` — the same host that serves `POST /deploy` and `POST /post-deploy`). **Do not** put the Hostinger developers API URL here (e.g. `https://developers.hostinger.com/api/...`); that causes n8n to call `…/api/post-deploy` and return **404**. Without a correct URL the Edge returns **400** or the UI disables **Post-deploy**.
+3. **`agent_base_url`** — Must be the **HTTPS origin** that reaches **`POST /post-deploy`** (NPM → **`openclaw-post-deploy-hook:18790`**, or self-hosted deploy-agent). **Do not** put the Hostinger developers API URL here (e.g. `https://developers.hostinger.com/api/...`); that causes n8n to return **404**. Without a correct URL the Edge returns **400** or the UI disables **Post-deploy**.
 4. **n8n URL** — Use the **production** webhook URL from the active workflow (often **Webhook** node → **Production URL**), not the test URL, unless you set the secret to the test URL on purpose.
-5. **Stack agent token** — **`stack_agent_bearer_token`** in `deploy_provider_settings` must match **`DEPLOY_AGENT_SECRET`** on the VPS; otherwise the n8n **POST deploy agent** step fails.
+5. **Stack agent token** — **`stack_agent_bearer_token`** in `deploy_provider_settings` must match **`STACK_AGENT_BEARER_TOKEN`** inside the stack’s `.env` (injected on deploy when missing) and the hook’s **`Authorization: Bearer`** header; if you use deploy-agent on the host, it must still match **`DEPLOY_AGENT_SECRET`** there.
 
 ### 4.1 Network prerequisite (`bot-bridge`)
 

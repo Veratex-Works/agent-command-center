@@ -53,7 +53,7 @@ Deno.serve(async (req) => {
       return corsJson(
         {
           error:
-            'agent_base_url is not set for this deployment. Set bot_deployment_infra.agent_base_url (deploy agent HTTPS URL) after provision.',
+            'agent_base_url is not set for this deployment. Set bot_deployment_infra.agent_base_url to the HTTPS origin that serves POST /post-deploy (Compose service openclaw-post-deploy-hook behind NPM, or a self-hosted deploy-agent).',
           stage: 'validation',
         },
         400,
@@ -68,7 +68,7 @@ Deno.serve(async (req) => {
       return corsJson(
         {
           error:
-            'bot_deployment_infra.agent_base_url must be your self-hosted deploy-agent origin (e.g. https://deploy.example.com), not the Hostinger VPS API URL. Fix the row in Supabase, then retry Post-deploy.',
+            'bot_deployment_infra.agent_base_url must be the HTTPS origin that serves POST /post-deploy (e.g. https://openclaw-hooks.example.com for the in-stack hook, or https://deploy.example.com for deploy-agent), not the Hostinger VPS API URL. Fix the row in Supabase, then retry Post-deploy.',
           stage: 'validation',
         },
         400,

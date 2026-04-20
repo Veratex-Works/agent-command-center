@@ -1,4 +1,8 @@
-# Hostinger VPS Docker API: `content` max 8192 chars — hook logic lives in image OPENCLAW_STACK_HOOK_IMAGE (see packages/openclaw-stack-hook).
+-- deploy_compose_template: Hostinger Docker API caps compose `content` at 8192 bytes — hook runs from OPENCLAW_STACK_HOOK_IMAGE (see packages/openclaw-stack-hook). Apply after 20260417120000 if that revision still had an oversized inline script.
+
+update public.deploy_compose_template
+set
+  compose_yaml = $compose_tpl$# Hostinger VPS Docker API: `content` max 8192 chars — hook logic lives in image OPENCLAW_STACK_HOOK_IMAGE (see packages/openclaw-stack-hook).
 # bot-bridge: docker network create bot-bridge
 # NPM: WebSocket → openclaw_bot__…:18789; Post-deploy HTTPS → hook :18790 (agent_base_url).
 services:
@@ -88,3 +92,6 @@ services:
 networks:
   bot-bridge:
     external: true
+$compose_tpl$,
+  updated_at = now()
+where id = 1;

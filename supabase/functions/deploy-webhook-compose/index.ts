@@ -76,8 +76,8 @@ Deno.serve(async (req) => {
       return corsJson({ error: 'Database error', stage: 'db_error' }, 500)
     }
 
-    const composeYaml = composeRow?.compose_yaml?.trim() ?? ''
-    if (!composeYaml) {
+    const rawCompose = composeRow?.compose_yaml?.trim() ?? ''
+    if (!rawCompose) {
       return corsJson(
         {
           error: 'Stack template is empty; save it under Deploy bot → Stack template.',
@@ -86,6 +86,9 @@ Deno.serve(async (req) => {
         404,
       )
     }
+
+    const idSafe = id.replace(/[^a-zA-Z0-9]/g, '').slice(0, 36)
+    const composeYaml = rawCompose.replace(/REPLACE_WITH_UNIQUE_NAME/g, idSafe)
 
     return corsJson({ composeYaml })
   } catch (e) {

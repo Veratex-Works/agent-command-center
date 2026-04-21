@@ -9,6 +9,7 @@ type DeployBotSecretFieldProps = {
   onChange: (value: string) => void
   isSecret: boolean
   className?: string
+  placeholder?: string
 }
 
 export function DeployBotSecretField({
@@ -16,6 +17,7 @@ export function DeployBotSecretField({
   onChange,
   isSecret,
   className,
+  placeholder,
 }: DeployBotSecretFieldProps) {
   const [visible, setVisible] = useState(false)
   const cls = className ?? inputBase
@@ -28,6 +30,7 @@ export function DeployBotSecretField({
         onChange={(e) => onChange(e.target.value)}
         autoComplete="off"
         spellCheck={false}
+        placeholder={placeholder}
         className={cls}
       />
     )
@@ -41,6 +44,7 @@ export function DeployBotSecretField({
         onChange={(e) => onChange(e.target.value)}
         autoComplete="off"
         spellCheck={false}
+        placeholder={placeholder}
         className={`${cls} pr-10`}
       />
       <button

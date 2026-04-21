@@ -18,7 +18,12 @@ import {
   type BotDeploymentWithAssignee,
 } from '@/services/botDeployments'
 import { fetchUnassignedUserProfiles } from '@/services/profiles'
-import { DEPLOYMENT_ENV_KEYS, type DeploymentEnv } from '@/types/database'
+import {
+  DEPLOYMENT_ENV_HELP,
+  DEPLOYMENT_ENV_KEYS,
+  DEPLOYMENT_ENV_LABELS,
+  type DeploymentEnv,
+} from '@/types/database'
 import type { Profile } from '@/types/database'
 
 function emptyEnv(): DeploymentEnv {
@@ -504,12 +509,16 @@ export function DeployBotPage() {
           {DEPLOYMENT_ENV_KEYS.map((key) => (
             <div key={key} className="flex flex-col gap-1.5">
               <label className="font-mono text-[11px] text-muted uppercase tracking-[0.05em]">
-                {key}
+                {DEPLOYMENT_ENV_LABELS[key] ?? key}
               </label>
+              {DEPLOYMENT_ENV_HELP[key] ? (
+                <p className="text-muted text-[12px] leading-snug m-0">{DEPLOYMENT_ENV_HELP[key]}</p>
+              ) : null}
               <DeployBotSecretField
                 isSecret={isSecretEnvKey(key)}
                 value={env[key] ?? ''}
                 onChange={(v) => setEnv((prev) => ({ ...prev, [key]: v }))}
+                placeholder={key === 'OPENCLAW_STACK_HOOK_IMAGE' ? 'ghcr.io/org/repo:tag' : undefined}
               />
             </div>
           ))}

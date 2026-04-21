@@ -34,11 +34,27 @@ export const DEPLOYMENT_ENV_KEYS = [
   'OPENCLAW_GATEWAY_PORT',
   /** Comma-separated proxy IPs for openclaw.json gateway.trustedProxies (e.g. NPM on bot-bridge). */
   'OPENCLAW_GATEWAY_TRUSTED_PROXIES',
+  /**
+   * Docker image ref for compose service `openclaw-post-deploy-hook` (${OPENCLAW_STACK_HOOK_IMAGE}).
+   * Required for Hostinger / n8n deploy when DEFAULT_OPENCLAW_STACK_HOOK_IMAGE is not set on deploy-bot Edge.
+   */
+  'OPENCLAW_STACK_HOOK_IMAGE',
 ] as const
 
 export type DeploymentEnvKey = (typeof DEPLOYMENT_ENV_KEYS)[number]
 
 export type DeploymentEnv = Partial<Record<DeploymentEnvKey, string>>
+
+/** Optional short labels for the Deploy bot form (fallback: raw env key). */
+export const DEPLOYMENT_ENV_LABELS: Partial<Record<DeploymentEnvKey, string>> = {
+  OPENCLAW_STACK_HOOK_IMAGE: 'Stack hook Docker image',
+}
+
+/** Optional one-line help under the field label. */
+export const DEPLOYMENT_ENV_HELP: Partial<Record<DeploymentEnvKey, string>> = {
+  OPENCLAW_STACK_HOOK_IMAGE:
+    'Full image reference (e.g. ghcr.io/your-org/openclaw-stack-hook:1.0.0). Written to the VPS .env so compose can pull the hook container.',
+}
 
 export interface BotDeployment {
   id: string

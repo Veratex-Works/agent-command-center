@@ -52,12 +52,15 @@ export type DeploymentEnv = Partial<Record<DeploymentEnvKey, string>>
 
 /** Optional short labels for the Deploy bot form (fallback: raw env key). */
 export const DEPLOYMENT_ENV_LABELS: Partial<Record<DeploymentEnvKey, string>> = {
+  OPENCLAW_GATEWAY_PORT: 'OpenClaw gateway port',
   OPENCLAW_STACK_HOOK_IMAGE: 'Stack hook Docker image',
   STACK_HOOK_PORT: 'Stack hook port',
 }
 
 /** Optional one-line help under the field label. */
 export const DEPLOYMENT_ENV_HELP: Partial<Record<DeploymentEnvKey, string>> = {
+  OPENCLAW_GATEWAY_PORT:
+    'Port the OpenClaw gateway listens on in the stack (default 18789). Set a unique value per deployment on one VPS; point NPM WebSocket upstream at this port on the bot container.',
   OPENCLAW_STACK_HOOK_IMAGE:
     'Full image reference (e.g. ghcr.io/your-org/openclaw-stack-hook:1.0.0). Written to the VPS .env so compose can pull the hook container.',
   STACK_HOOK_PORT:

@@ -13,3 +13,7 @@ verify_jwt = false
 # Superadmin “Post-deploy config” → n8n → deploy-agent POST /post-deploy (OpenClaw merge job).
 [functions.deploy-post-openclaw]
 verify_jwt = false
+
+# Superadmin UI: delete auth user (cascades public.profiles, chat_logs; clears bot assignment).
+[functions.admin-delete-user]
+verify_jwt = false

@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom'
-import { Trash2, Settings, LogOut, Database, Rocket } from 'lucide-react'
+import { Trash2, Settings, LogOut, Database, Rocket, Users } from 'lucide-react'
 import { useChatStore } from '@/store/useChatStore'
 import { useAuth } from '@/hooks/useAuth'
 import { HeartbeatLight } from '@/components/HeartbeatLight'
@@ -38,6 +38,14 @@ export function Header() {
             >
               <Rocket size={14} />
               <span className="hidden sm:inline">Deploy</span>
+            </Link>
+            <Link
+              to="/admin/users"
+              title="Users"
+              className="bg-surface2 border border-border text-muted px-2.5 py-1.5 rounded-lg cursor-pointer flex items-center gap-1.5 text-xs font-semibold transition-all duration-150 hover:border-accent hover:text-accent"
+            >
+              <Users size={14} />
+              <span className="hidden sm:inline">Users</span>
             </Link>
           </>
         )}

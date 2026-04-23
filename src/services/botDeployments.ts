@@ -167,10 +167,17 @@ export async function deleteBotDeployment(id: string): Promise<{ error: string |
   return { error: error?.message ?? null }
 }
 
-/** Client: RLS returns at most the row assigned to the current user. */
+/** Client: row where `assigned_user_id` is the signed-in user (explicit filter + RLS). */
 export async function fetchMyBotDeployment(): Promise<BotDeployment | null> {
   if (!supabase) return null
-  const { data, error } = await supabase.from('bot_deployments').select('*').maybeSingle()
+  const { data: auth } = await supabase.auth.getUser()
+  const uid = auth.user?.id
+  if (!uid) return null
+  const { data, error } = await supabase
+    .from('bot_deployments')
+    .select('*')
+    .eq('assigned_user_id', uid)
+    .maybeSingle()
   if (error || !data) return null
   return mapRow(data as Record<string, unknown>)
 }

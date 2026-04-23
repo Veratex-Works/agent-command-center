@@ -7,7 +7,7 @@ function env(name: string): string | null {
 }
 
 export async function requireSuperadmin(req: Request): Promise<
-  | { ok: true; serviceClient: SupabaseClient }
+  | { ok: true; serviceClient: SupabaseClient; callerId: string }
   | { ok: false; response: Response }
 > {
   const authHeader = req.headers.get('Authorization')
@@ -54,5 +54,5 @@ export async function requireSuperadmin(req: Request): Promise<
     return { ok: false, response: corsJson({ error: 'Forbidden' }, 403) }
   }
 
-  return { ok: true, serviceClient }
+  return { ok: true, serviceClient, callerId: user.id }
 }

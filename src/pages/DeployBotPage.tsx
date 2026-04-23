@@ -9,6 +9,7 @@ import { useDeployBotSessionDraft } from '@/hooks/useDeployBotSessionDraft'
 import { clearDeployBotSessionDraft } from '@/lib/deployBotSessionDraft'
 import {
   createBotDeployment,
+  deleteBotDeployment,
   formatDeployBotInvokeMessage,
   invokeDeployBot,
   invokeDeployBotTest,
@@ -81,6 +82,7 @@ export function DeployBotPage() {
   const [loading, setLoading] = useState(true)
   const [busyId, setBusyId] = useState<string | null>(null)
   const [postDeployBusyId, setPostDeployBusyId] = useState<string | null>(null)
+  const [deleteBusyId, setDeleteBusyId] = useState<string | null>(null)
   /** Short-lived line under table actions after Deploy / Post-deploy from the list. */
   const [rowActionFlash, setRowActionFlash] = useState<{
     deploymentId: string
@@ -395,7 +397,36 @@ export function DeployBotPage() {
     else void refresh()
   }
 
-  const buttonsDisabled = formBusy || testBusy || busyId !== null || postDeployBusyId !== null
+  const tableBusy = busyId !== null || postDeployBusyId !== null || deleteBusyId !== null
+  const buttonsDisabled = formBusy || testBusy || tableBusy
+
+  const handleDeleteDeployment = async (row: BotDeploymentWithAssignee) => {
+    const label = row.customer_label.trim() || row.id.slice(0, 8)
+    if (
+      !window.confirm(
+        `Delete deployment “${label}” (status: ${row.status})?\n\n` +
+          'The row is removed in Supabase; linked infra (VM/IP/agent URL) is removed with it. ' +
+          'This does not stop Docker on the VPS — tear down stacks there separately if needed.',
+      )
+    ) {
+      return
+    }
+    setDeleteBusyId(row.id)
+    setRowActionFlash(null)
+    setListError(null)
+    const { error } = await deleteBotDeployment(row.id)
+    setDeleteBusyId(null)
+    if (error) {
+      setListError(error)
+      setRowActionFlash({ deploymentId: row.id, tone: 'err', text: error })
+      return
+    }
+    if (editingId === row.id) {
+      resetForm()
+    }
+    setBanner(`Deleted “${label}”.`)
+    void refresh()
+  }
 
   return (
     <div className="flex flex-col flex-1 min-h-0 overflow-auto p-5 gap-6">
@@ -521,9 +552,11 @@ export function DeployBotPage() {
                 placeholder={
                   key === 'OPENCLAW_STACK_HOOK_IMAGE'
                     ? 'ghcr.io/org/repo:tag'
-                    : key === 'STACK_HOOK_PORT'
-                      ? '18790'
-                      : undefined
+                    : key === 'OPENCLAW_GATEWAY_PORT'
+                      ? '18789'
+                      : key === 'STACK_HOOK_PORT'
+                        ? '18790'
+                        : undefined
                 }
               />
             </div>
@@ -643,7 +676,7 @@ export function DeployBotPage() {
                           </span>
                           <button
                             type="button"
-                            disabled={busyId === row.id}
+                            disabled={tableBusy}
                             className="text-left text-xs text-accent font-semibold hover:underline disabled:opacity-50"
                             onClick={() => void onAssignChange(row.id, '')}
                           >
@@ -652,7 +685,7 @@ export function DeployBotPage() {
                         </div>
                       ) : (
                         <select
-                          disabled={busyId === row.id}
+                          disabled={tableBusy}
                           value=""
                           onChange={(e) => void onAssignChange(row.id, e.target.value)}
                           className="bg-surface2 border border-border text-content font-mono text-[12px] px-2 py-1.5 rounded-lg w-full max-w-[220px] disabled:opacity-60"
@@ -671,7 +704,7 @@ export function DeployBotPage() {
                         <div className="flex flex-wrap gap-x-3 gap-y-1 items-center whitespace-nowrap">
                           <button
                             type="button"
-                            disabled={busyId !== null || postDeployBusyId !== null}
+                            disabled={tableBusy}
                             onClick={() => void deployExisting(row.id)}
                             className="text-accent text-xs font-semibold hover:underline disabled:opacity-50"
                           >
@@ -679,11 +712,7 @@ export function DeployBotPage() {
                           </button>
                           <button
                             type="button"
-                            disabled={
-                              busyId !== null ||
-                              postDeployBusyId !== null ||
-                              !row.infra?.agent_base_url?.trim()
-                            }
+                            disabled={tableBusy || !row.infra?.agent_base_url?.trim()}
                             onClick={() => void postDeployExisting(row.id)}
                             className="text-accent text-xs font-semibold hover:underline disabled:opacity-50"
                             title={
@@ -696,11 +725,20 @@ export function DeployBotPage() {
                           </button>
                           <button
                             type="button"
-                            disabled={busyId !== null || postDeployBusyId !== null}
+                            disabled={tableBusy}
                             onClick={() => loadRowForEdit(row)}
                             className="text-muted text-xs font-semibold hover:text-accent"
                           >
                             Edit
+                          </button>
+                          <button
+                            type="button"
+                            disabled={tableBusy}
+                            onClick={() => void handleDeleteDeployment(row)}
+                            className="text-red-400 text-xs font-semibold hover:underline disabled:opacity-50"
+                            title="Remove this deployment row and linked infra in Supabase"
+                          >
+                            {deleteBusyId === row.id ? '…' : 'Delete'}
                           </button>
                         </div>
                         {rowActionFlash?.deploymentId === row.id ? (

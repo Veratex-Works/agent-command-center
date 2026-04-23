@@ -14,6 +14,7 @@ import {
 } from '@/lib/websocketChatLog'
 import { insertChatLogBatch } from '@/services/chatLogs'
 import { clearDeployBotSessionDraft } from '@/lib/deployBotSessionDraft'
+import { useChatStore } from '@/store/useChatStore'
 import { fetchProfile } from '@/services/profiles'
 import type { Profile } from '@/types/database'
 import type { Session, User } from '@supabase/supabase-js'
@@ -118,7 +119,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const signUp = useCallback(async (email: string, password: string) => {
     if (!supabase) return { error: 'Supabase is not configured.' }
     setAuthError(null)
-    const { error } = await supabase.auth.signUp({ email, password })
+    const emailRedirectTo =
+      typeof window !== 'undefined' ? `${window.location.origin}/` : undefined
+    const { data, error } = await supabase.auth.signUp({
+      email,
+      password,
+      options: emailRedirectTo ? { emailRedirectTo } : undefined,
+    })
+    if (error) return { error: error.message }
+    const needsEmailConfirmation = Boolean(data.user) && !data.session
+    return { error: null, needsEmailConfirmation }
+  }, [])
+
+  const resendSignupEmail = useCallback(async (email: string) => {
+    if (!supabase) return { error: 'Supabase is not configured.' }
+    setAuthError(null)
+    const emailRedirectTo =
+      typeof window !== 'undefined' ? `${window.location.origin}/` : undefined
+    const { error } = await supabase.auth.resend({
+      type: 'signup',
+      email: email.trim(),
+      options: emailRedirectTo ? { emailRedirectTo } : undefined,
+    })
     return { error: error?.message ?? null }
   }, [])
 
@@ -127,6 +149,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const uid = userRef.current?.id
     setAuthError(null)
     await supabase.auth.signOut()
+    useChatStore.getState().clearChatForLogout()
     if (uid) clearDeployBotSessionDraft(uid)
   }, [])
 
@@ -139,9 +162,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       authError,
       signIn,
       signUp,
+      resendSignupEmail,
       signOut,
     }),
-    [session, user, profile, loading, authError, signIn, signUp, signOut],
+    [session, user, profile, loading, authError, signIn, signUp, resendSignupEmail, signOut],
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

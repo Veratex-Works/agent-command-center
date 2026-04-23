@@ -28,6 +28,7 @@ function SettingsFormBody({
   setSettingsOpen,
 }: SettingsFormBodyProps) {
   const { user, profile } = useAuth()
+  const isClient = profile?.role === 'user'
   const sessionKeyEditable = profile?.role === 'superadmin'
   const derivedSessionKey = user?.id ? getDefaultSessionKeyForUser(user.id) : ''
 
@@ -43,6 +44,42 @@ function SettingsFormBody({
   }, [config.url, config.token, config.sessionKey])
 
   const handleClose = () => setSettingsOpen(false)
+
+  if (isClient) {
+    return (
+      <div className="bg-surface border border-border rounded-2xl p-7 w-full max-w-[420px] flex flex-col gap-[18px]">
+        <div className="flex justify-between items-center text-lg font-bold text-content">
+          Settings
+          <button
+            type="button"
+            onClick={handleClose}
+            className="bg-surface2 border border-border text-muted w-[34px] h-[34px] rounded-lg cursor-pointer flex items-center justify-center transition-all duration-150 hover:border-accent hover:text-accent"
+          >
+            <X size={14} />
+          </button>
+        </div>
+        <p className="text-muted text-sm leading-relaxed m-0">
+          Your gateway URL and token come from the <strong className="text-content">bot deployment</strong> assigned
+          to you in Deploy bot. They update automatically after deploy and post-deploy — you cannot change them here.
+        </p>
+        <div className="flex flex-col gap-1.5">
+          <span className="font-mono text-[11px] text-muted uppercase tracking-[0.05em]">Session lane</span>
+          <div className="bg-surface2 border border-border text-muted font-mono text-[13px] px-3 py-2.5 rounded-lg w-full break-all">
+            {config.sessionKey.trim() || derivedSessionKey || '—'}
+          </div>
+        </div>
+        <div className="flex justify-end">
+          <button
+            type="button"
+            onClick={handleClose}
+            className="bg-accent text-base border-none px-5 py-[11px] rounded-lg font-sans text-sm font-bold cursor-pointer transition-all duration-150 hover:opacity-90"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    )
+  }
 
   const handleSave = (e: FormEvent) => {
     e.preventDefault()

@@ -3,12 +3,15 @@ import { Navigate } from 'react-router-dom'
 import { useAuth } from '@/hooks/useAuth'
 
 export function LoginPage() {
-  const { user, loading, signIn, signUp, authError } = useAuth()
+  const { user, loading, signIn, signUp, resendSignupEmail, authError } = useAuth()
   const [mode, setMode] = useState<'signin' | 'signup'>('signin')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [formError, setFormError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
+  const [signupAwaitingEmail, setSignupAwaitingEmail] = useState(false)
+  const [resendBusy, setResendBusy] = useState(false)
+  const [resendOk, setResendOk] = useState(false)
 
   if (loading) {
     return (
@@ -25,11 +28,42 @@ export function LoginPage() {
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault()
     setFormError(null)
+    setResendOk(false)
     setSubmitting(true)
-    const fn = mode === 'signin' ? signIn : signUp
-    const { error } = await fn(email.trim(), password)
+    if (mode === 'signin') {
+      const { error } = await signIn(email.trim(), password)
+      setSubmitting(false)
+      setSignupAwaitingEmail(false)
+      if (error) setFormError(error)
+      return
+    }
+    const signUpResult = await signUp(email.trim(), password)
     setSubmitting(false)
+    if (signUpResult.error) {
+      setSignupAwaitingEmail(false)
+      setFormError(signUpResult.error)
+      return
+    }
+    if (signUpResult.needsEmailConfirmation) {
+      setSignupAwaitingEmail(true)
+      return
+    }
+    setSignupAwaitingEmail(false)
+  }
+
+  const handleResendConfirmation = async () => {
+    const em = email.trim()
+    if (!em) {
+      setFormError('Enter the email you used to sign up.')
+      return
+    }
+    setFormError(null)
+    setResendOk(false)
+    setResendBusy(true)
+    const { error } = await resendSignupEmail(em)
+    setResendBusy(false)
     if (error) setFormError(error)
+    else setResendOk(true)
   }
 
   const displayError = formError ?? authError
@@ -50,6 +84,8 @@ export function LoginPage() {
             onClick={() => {
               setMode('signin')
               setFormError(null)
+              setSignupAwaitingEmail(false)
+              setResendOk(false)
             }}
             className={`flex-1 py-2 rounded-lg text-sm font-semibold border transition-colors ${
               mode === 'signin'
@@ -64,6 +100,8 @@ export function LoginPage() {
             onClick={() => {
               setMode('signup')
               setFormError(null)
+              setSignupAwaitingEmail(false)
+              setResendOk(false)
             }}
             className={`flex-1 py-2 rounded-lg text-sm font-semibold border transition-colors ${
               mode === 'signup'
@@ -105,6 +143,27 @@ export function LoginPage() {
           </div>
           {displayError && (
             <p className="text-red-400 font-mono text-[12px] m-0">{displayError}</p>
+          )}
+          {signupAwaitingEmail && mode === 'signup' && (
+            <div className="flex flex-col gap-2 rounded-lg border border-border bg-surface2 p-3">
+              <p className="text-muted text-[12px] m-0 leading-relaxed">
+                Check your inbox for the confirmation link. If nothing arrived, confirm the email
+                address above matches the account you created, then resend.
+              </p>
+              <div className="flex flex-wrap gap-2 items-center">
+                <button
+                  type="button"
+                  disabled={resendBusy}
+                  onClick={() => void handleResendConfirmation()}
+                  className="bg-surface border border-border text-content text-xs font-semibold px-3 py-2 rounded-lg hover:border-accent disabled:opacity-50"
+                >
+                  {resendBusy ? 'Sending…' : 'Resend confirmation email'}
+                </button>
+                {resendOk ? (
+                  <span className="text-emerald-400 text-[12px] font-semibold">Sent.</span>
+                ) : null}
+              </div>
+            </div>
           )}
           <button
             type="submit"

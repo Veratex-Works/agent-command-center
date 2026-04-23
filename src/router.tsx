@@ -7,6 +7,7 @@ import { LoginPage } from '@/pages/LoginPage'
 import { DbConnectionPage } from '@/pages/DbConnectionPage'
 import { DeployBotPage } from '@/pages/DeployBotPage'
 import { AdminSessionsPage } from '@/pages/AdminSessionsPage'
+import { AdminUsersPage } from '@/pages/AdminUsersPage'
 
 export const router = createBrowserRouter([
   { path: '/login', element: <LoginPage /> },
@@ -39,6 +40,14 @@ export const router = createBrowserRouter([
             element: (
               <SuperadminGate>
                 <AdminSessionsPage />
+              </SuperadminGate>
+            ),
+          },
+          {
+            path: 'admin/users',
+            element: (
+              <SuperadminGate>
+                <AdminUsersPage />
               </SuperadminGate>
             ),
           },

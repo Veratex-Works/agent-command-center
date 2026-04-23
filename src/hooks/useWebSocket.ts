@@ -116,9 +116,73 @@ function bestTranscriptStringDeep(node: unknown, depth: number): { text: string;
   return { text: '', score: -1 }
 }
 
-function extractMessageText(content: HistoryMessage['content']): string {
+/**
+ * Only human-visible prose blocks (skip tool/image/audio blobs whose nested fields
+ * `normalizeTextField` would otherwise concatenate into gibberish on history restore).
+ */
+function assistantVisibleTextFromBlockArray(blocks: unknown): string {
+  if (blocks == null) return ''
+  if (typeof blocks === 'string') return blocks.trim()
+  if (typeof blocks === 'object' && !Array.isArray(blocks) && blocks !== null) {
+    const o = blocks as Record<string, unknown>
+    if (typeof o.text === 'string') return o.text.trim()
+    return ''
+  }
+  if (!Array.isArray(blocks)) return ''
+
+  const out: string[] = []
+  for (const block of blocks) {
+    if (typeof block === 'string') {
+      if (block.trim()) out.push(block.trim())
+      continue
+    }
+    if (!block || typeof block !== 'object' || Array.isArray(block)) continue
+    const b = block as Record<string, unknown>
+    if ('inlineData' in b || 'inline_data' in b || 'image_url' in b) continue
+
+    const typ = typeof b.type === 'string' ? b.type.toLowerCase() : ''
+    if (
+      typ === 'tool_use' ||
+      typ === 'tool_result' ||
+      typ === 'tool_calls' ||
+      typ === 'function' ||
+      typ === 'image_url' ||
+      typ === 'image' ||
+      typ === 'input_audio' ||
+      typ === 'file' ||
+      typ === 'reasoning'
+    ) {
+      continue
+    }
+
+    const pickText = (): string => {
+      const t = b.text
+      if (typeof t === 'string') return t
+      if (t && typeof t === 'object' && !Array.isArray(t)) {
+        const o = t as Record<string, unknown>
+        if (typeof o.value === 'string') return o.value
+      }
+      const c = b.content
+      if (typeof c === 'string') return c
+      return ''
+    }
+
+    if (typ === 'text' || typ === 'output_text') {
+      const s = pickText()
+      if (s) out.push(s)
+      continue
+    }
+    if (!typ && typeof b.text === 'string') {
+      out.push(b.text)
+    }
+  }
+  return out.join('').trim()
+}
+
+function extractMessageText(content: HistoryMessage['content'], strictTextBlocks: boolean): string {
   if (typeof content === 'string') return content
   if (Array.isArray(content)) {
+    if (strictTextBlocks) return assistantVisibleTextFromBlockArray(content)
     return content.map((block) => normalizeTextField(block, 0)).join('').trim()
   }
   return normalizeTextField(content, 0).trim()
@@ -137,6 +201,21 @@ function extractVisibleTextFromHistoryMessage(msg: HistoryMessage): string {
 
   if (typeof msg.text === 'string' && accept(msg.text)) return msg.text.trim()
   if (typeof msg.preview === 'string' && accept(msg.preview)) return msg.preview.trim()
+
+  if (strictAssistant) {
+    const fromBlocks = extractMessageText(msg.content, true).trim()
+    if (fromBlocks && accept(fromBlocks)) return fromBlocks
+
+    const oc = msg.__openclaw
+    const viaOcDeep = bestTranscriptStringDeep(oc, 0)
+    if (viaOcDeep.score > 0) return viaOcDeep.text.trim()
+
+    const fromPartsNarrow = assistantVisibleTextFromBlockArray(msg.parts)
+    if (fromPartsNarrow && accept(fromPartsNarrow)) return fromPartsNarrow
+
+    return ''
+  }
+
   const fromParts = normalizeTextField(msg.parts, 0).trim()
   if (fromParts && accept(fromParts)) return fromParts
   const fromPayload = normalizeTextField(msg.payload, 0).trim()
@@ -144,14 +223,7 @@ function extractVisibleTextFromHistoryMessage(msg: HistoryMessage): string {
   const fromAnn = normalizeTextField(msg.annotations, 0).trim()
   if (fromAnn && accept(fromAnn)) return fromAnn
 
-  // `api` is provider / routing metadata (often raw completion JSON) — never show it as chat.
-  const oc = msg.__openclaw
-  if (strictAssistant) {
-    const viaOcDeep = bestTranscriptStringDeep(oc, 0)
-    if (viaOcDeep.score > 0) return viaOcDeep.text.trim()
-  }
-
-  const fromBlocks = extractMessageText(msg.content)
+  const fromBlocks = extractMessageText(msg.content, false).trim()
   if (fromBlocks && accept(fromBlocks)) return fromBlocks
   return ''
 }
@@ -170,7 +242,7 @@ function extractAssistantTextFromChatPayload(p: GatewayPayload['payload'] | unde
   if (p.role === 'assistant') {
     const c = p.content
     if (typeof c === 'string') return c
-    if (Array.isArray(c)) return extractMessageText(c as HistoryMessage['content'])
+    if (Array.isArray(c)) return extractMessageText(c as HistoryMessage['content'], true)
   }
   const fromData = p.data?.text ?? p.data?.content
   if (typeof fromData === 'string' && fromData) return fromData
@@ -534,8 +606,10 @@ export function useWebSocket(getFallbackSessionKey?: () => string | undefined) {
         const status = typeof p.status === 'string' ? p.status : ''
         const explicitFail =
           p.indicatorType === 'error' || /fail|error|denied/i.test(status)
-        const explicitOk = p.indicatorType === 'ok' || /^ok/i.test(status)
-        const ok = !explicitFail && explicitOk
+        // Liveness: any heartbeat without an explicit failure counts as OK.
+        // (Previously we also required indicatorType/status to say "ok", so neutral
+        // payloads looked like permanent failures even though the channel was fine.)
+        const ok = !explicitFail
         store.getState().setHeartbeatIndicator({
           at: typeof p.ts === 'number' ? p.ts : Date.now(),
           ok,

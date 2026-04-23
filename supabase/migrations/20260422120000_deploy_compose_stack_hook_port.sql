@@ -1,4 +1,9 @@
-# Hostinger VPS Docker API: `content` max 8192 chars — hook logic lives in image OPENCLAW_STACK_HOOK_IMAGE (see packages/openclaw-stack-hook).
+-- deploy_compose_template: hook port from STACK_HOOK_PORT in VPS .env (Compose interpolation + hook env_file).
+-- Replaces OPENCLAW_STACK_HOOK_PORT host-only mapping so container listen port, publish, healthcheck, and curl stay aligned.
+
+update public.deploy_compose_template
+set
+  compose_yaml = $compose_tpl$# Hostinger VPS Docker API: `content` max 8192 chars — hook logic lives in image OPENCLAW_STACK_HOOK_IMAGE (see packages/openclaw-stack-hook).
 # bot-bridge: docker network create bot-bridge
 # NPM: WebSocket → openclaw_bot__…:18789; Post-deploy HTTPS → hook (STACK_HOOK_PORT in .env, default 18790).
 services:
@@ -88,3 +93,6 @@ services:
 networks:
   bot-bridge:
     external: true
+$compose_tpl$,
+  updated_at = now()
+where id = 1;

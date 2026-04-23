@@ -518,7 +518,13 @@ export function DeployBotPage() {
                 isSecret={isSecretEnvKey(key)}
                 value={env[key] ?? ''}
                 onChange={(v) => setEnv((prev) => ({ ...prev, [key]: v }))}
-                placeholder={key === 'OPENCLAW_STACK_HOOK_IMAGE' ? 'ghcr.io/org/repo:tag' : undefined}
+                placeholder={
+                  key === 'OPENCLAW_STACK_HOOK_IMAGE'
+                    ? 'ghcr.io/org/repo:tag'
+                    : key === 'STACK_HOOK_PORT'
+                      ? '18790'
+                      : undefined
+                }
               />
             </div>
           ))}

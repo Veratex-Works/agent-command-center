@@ -11,10 +11,10 @@ Small Node HTTP service on the **host** (not inside the OpenClaw compose stack):
 |-----------------|----------------|------|
 | `openclaw-workspace-init` | **No** — exits after `chown` | One-shot; “Exited” in the panel is **success**. |
 | `openclaw` | **Yes** | Gateway (`docker ps` shows this name). |
-| `openclaw-post-deploy-hook` | **Yes** | Image from **`OPENCLAW_STACK_HOOK_IMAGE`** (see `packages/openclaw-stack-hook`); `POST /post-deploy` (Bearer `STACK_AGENT_BEARER_TOKEN`); publish **:18790** (or `OPENCLAW_STACK_HOOK_PORT`) for NPM when you **do not** run deploy-agent on the host. Hostinger’s compose **`content`** limit is **8192** chars — hook logic must live in that image, not inline in YAML. |
+| `openclaw-post-deploy-hook` | **Yes** | Image from **`OPENCLAW_STACK_HOOK_IMAGE`** (see `packages/openclaw-stack-hook`); `POST /post-deploy` (Bearer `STACK_AGENT_BEARER_TOKEN`); port from **`STACK_HOOK_PORT`** in the stack `.env` (default **18790**) for NPM when you **do not** run deploy-agent on the host. Hostinger’s compose **`content`** limit is **8192** chars — hook logic must live in that image, not inline in YAML. |
 | `openclaw-post-deploy` | **No** — `compose run` (profile `post-deploy`) | Thin `curl` to the hook; used by deploy-agent’s `POST /post-deploy` or manual CLI. |
 
-If you use **only** Hostinger + n8n (no deploy-agent on the VPS), set **`bot_deployment_infra.agent_base_url`** to the **HTTPS origin** that proxies to **`openclaw-post-deploy-hook:18790`** (same bearer as **Stack agent bearer token**). If you run **deploy-agent** on the host, point **`agent_base_url`** at that Node process (e.g. `:8080`) instead; it still shells out to `docker compose … run openclaw-post-deploy`, which calls the hook internally.
+If you use **only** Hostinger + n8n (no deploy-agent on the VPS), set **`bot_deployment_infra.agent_base_url`** to the **HTTPS origin** that proxies to the hook’s **published host port** (from **`STACK_HOOK_PORT`** in the stack `.env`, default **18790**; same bearer as **Stack agent bearer token**). If you run **deploy-agent** on the host, point **`agent_base_url`** at that Node process (e.g. `:8080`) instead; it still shells out to `docker compose … run openclaw-post-deploy`, which calls the hook internally.
 
 **Inspect `bot-bridge` on the VPS:**
 

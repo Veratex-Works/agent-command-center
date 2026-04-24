@@ -32,8 +32,11 @@ export function ChatPage() {
   const { connect, disconnect, sendMessage, abortRun, reconnect } = useWebSocket(getFallbackSessionKey)
   const connectRef = useRef(connect)
   const disconnectRef = useRef(disconnect)
-  connectRef.current = connect
-  disconnectRef.current = disconnect
+
+  useEffect(() => {
+    connectRef.current = connect
+    disconnectRef.current = disconnect
+  }, [connect, disconnect])
 
   /** One browser tab + localStorage: never inherit another account's gateway, messages, or WS. */
   const lastBootstrappedUserIdRef = useRef<string | undefined>(undefined)
@@ -63,55 +66,58 @@ export function ChatPage() {
   }, [user?.id, profile?.role, setConfig, sessionKeyFromUrl])
 
   useEffect(() => {
-    if (!user?.id) return
-    if (profile?.role === 'superadmin') {
-      setAssignmentChecked(true)
-      return
-    }
-    if (profile?.role !== 'user') {
-      setAssignmentChecked(true)
-      return
-    }
-    let cancelled = false
-    setAssignmentChecked(false)
-    void (async () => {
-      const row = await fetchMyBotDeployment()
-      if (cancelled) return
-      setAssignmentChecked(true)
-      if (!row) {
-        setShowConnectPrompt(false)
+    const cancelledRef = { current: false }
+    queueMicrotask(() => {
+      if (cancelledRef.current) return
+      if (!user?.id) return
+      if (profile?.role === 'superadmin') {
+        setAssignmentChecked(true)
         return
       }
-      const env = row.deployment_env
-      const url = env.OPENCLAW_GATEWAY_URL?.trim()
-      if (!url) {
-        setShowConnectPrompt(false)
+      if (profile?.role !== 'user') {
+        setAssignmentChecked(true)
         return
       }
-      const token = env.OPENCLAW_GATEWAY_TOKEN?.trim() ?? ''
-      const c = useChatStore.getState().config
-      const sk =
-        sessionKeyFromUrl ?? (user.id ? getDefaultSessionKeyForUser(user.id) : c.sessionKey)
-      const prevUrl = (c.url ?? '').trim()
-      const prevToken = (c.token ?? '').trim()
-      const prevSk = (c.sessionKey ?? '').trim()
-      const nextSk = (sk ?? '').trim()
-      const gatewayChanged = prevUrl !== url || prevToken !== token
-      const sessionChanged = prevSk !== nextSk
-      setConfig({
-        ...c,
-        url,
-        token,
-        sessionKey: sk,
-      })
-      setShowConnectPrompt(false)
-      if (gatewayChanged || sessionChanged) {
-        disconnectRef.current()
-        void connectRef.current()
-      }
-    })()
+      setAssignmentChecked(false)
+      void (async () => {
+        const row = await fetchMyBotDeployment()
+        if (cancelledRef.current) return
+        setAssignmentChecked(true)
+        if (!row) {
+          setShowConnectPrompt(false)
+          return
+        }
+        const env = row.deployment_env
+        const url = env.OPENCLAW_GATEWAY_URL?.trim()
+        if (!url) {
+          setShowConnectPrompt(false)
+          return
+        }
+        const token = env.OPENCLAW_GATEWAY_TOKEN?.trim() ?? ''
+        const c = useChatStore.getState().config
+        const sk =
+          sessionKeyFromUrl ?? (user.id ? getDefaultSessionKeyForUser(user.id) : c.sessionKey)
+        const prevUrl = (c.url ?? '').trim()
+        const prevToken = (c.token ?? '').trim()
+        const prevSk = (c.sessionKey ?? '').trim()
+        const nextSk = (sk ?? '').trim()
+        const gatewayChanged = prevUrl !== url || prevToken !== token
+        const sessionChanged = prevSk !== nextSk
+        setConfig({
+          ...c,
+          url,
+          token,
+          sessionKey: sk,
+        })
+        setShowConnectPrompt(false)
+        if (gatewayChanged || sessionChanged) {
+          disconnectRef.current()
+          void connectRef.current()
+        }
+      })()
+    })
     return () => {
-      cancelled = true
+      cancelledRef.current = true
     }
   }, [user?.id, profile?.role, setConfig, setShowConnectPrompt, sessionKeyFromUrl])
 

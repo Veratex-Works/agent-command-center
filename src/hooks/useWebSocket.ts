@@ -71,7 +71,7 @@ function isPlausibleUserVisibleAssistantText(s: string): boolean {
   if (head.includes('chatcmpl')) return false
   if (head.includes('"finish_reason"')) return false
   if (head.includes('"usage"') && head.includes('"completion_tokens"')) return false
-  if (/^\s*[\[{]/.test(t) && head.includes('"model"')) return false
+  if (/^\s*[[{]/.test(t) && head.includes('"model"')) return false
   const sample = t.slice(0, Math.min(t.length, 2500))
   const jsony = (sample.match(/["{}:[\],\\]/g) ?? []).length
   if (sample.length > 180 && jsony / sample.length > 0.22) return false
@@ -668,7 +668,6 @@ export function useWebSocket(getFallbackSessionKey?: () => string | undefined) {
       handleChatLaneEvent,
       handleChatEvent,
       handleAgentEvent,
-      resolveSessionKey,
     ],
   )
 

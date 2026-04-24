@@ -27,7 +27,9 @@ export function AdminUsersPage() {
   }, [])
 
   useEffect(() => {
-    void refresh()
+    queueMicrotask(() => {
+      void refresh()
+    })
   }, [refresh])
 
   const superadminCount = rows.filter((r) => r.role === 'superadmin').length

@@ -1,4 +1,4 @@
-import { useState, useEffect, type FormEvent } from 'react'
+import { useState, type FormEvent } from 'react'
 import { X } from 'lucide-react'
 import { useAuth } from '@/hooks/useAuth'
 import { useChatStore } from '@/store/useChatStore'
@@ -36,12 +36,6 @@ function SettingsFormBody({
   const [token, setToken] = useState(config.token)
   const [sessionKey, setSessionKey] = useState(config.sessionKey)
   const [showToken, setShowToken] = useState(false)
-
-  useEffect(() => {
-    setUrl(config.url)
-    setToken(config.token)
-    setSessionKey(config.sessionKey)
-  }, [config.url, config.token, config.sessionKey])
 
   const handleClose = () => setSettingsOpen(false)
 
@@ -206,6 +200,7 @@ export function SettingsPanel({ onAbort, onReconnect }: SettingsPanelProps) {
       onClick={(e) => e.target === e.currentTarget && setSettingsOpen(false)}
     >
       <SettingsFormBody
+        key={`${config.url}\u0000${config.token}\u0000${config.sessionKey}`}
         config={config}
         isRunning={isRunning}
         onAbort={onAbort}

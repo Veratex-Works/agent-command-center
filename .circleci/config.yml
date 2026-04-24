@@ -3,7 +3,7 @@
 #
 # Required on main (deploy): Project Settings → Environment Variables (or a Context
 # attached to this project) — set:
-#   VPS_HOST          — VPS hostname or IP
+#   VPS_HOST          — VPS hostname or IP 187.124.208.205
 #   VPS_USER          — SSH user (e.g. deploy or root)
 #   VPS_DEPLOY_PATH   — absolute path on the server (e.g. /var/www/openclaw) — rsync
 #                       writes *contents* into this directory (trailing slash on source)

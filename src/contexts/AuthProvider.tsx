@@ -23,10 +23,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null)
   const [user, setUser] = useState<User | null>(null)
   const userRef = useRef<User | null>(null)
-  userRef.current = user
   const [profile, setProfile] = useState<Profile | null>(null)
   const [loading, setLoading] = useState(true)
   const [authError, setAuthError] = useState<string | null>(null)
+
+  useEffect(() => {
+    userRef.current = user
+  }, [user])
 
   const loadProfile = useCallback(async (userId: string) => {
     let p = await fetchProfile(userId)

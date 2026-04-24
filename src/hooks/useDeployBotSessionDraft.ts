@@ -23,28 +23,30 @@ export function useDeployBotSessionDraft(
   const lastUserIdRef = useRef<string | undefined>(undefined)
 
   useEffect(() => {
-    if (!userId) {
-      setDraftReady(false)
-      lastUserIdRef.current = undefined
-      return
-    }
-
-    if (lastUserIdRef.current !== userId) {
-      lastUserIdRef.current = userId
-      setDraftReady(false)
-      const stored = readDeployBotSessionDraft(userId)
-      if (stored) {
-        setCustomerLabel(stored.customerLabel)
-        const merged = emptyEnv()
-        for (const k of DEPLOYMENT_ENV_KEYS) {
-          const v = stored.env[k]
-          if (typeof v === 'string') merged[k] = v
-        }
-        setEnv(merged)
-        setEditingId(stored.editingId)
+    queueMicrotask(() => {
+      if (!userId) {
+        setDraftReady(false)
+        lastUserIdRef.current = undefined
+        return
       }
-      setDraftReady(true)
-    }
+
+      if (lastUserIdRef.current !== userId) {
+        lastUserIdRef.current = userId
+        setDraftReady(false)
+        const stored = readDeployBotSessionDraft(userId)
+        if (stored) {
+          setCustomerLabel(stored.customerLabel)
+          const merged = emptyEnv()
+          for (const k of DEPLOYMENT_ENV_KEYS) {
+            const v = stored.env[k]
+            if (typeof v === 'string') merged[k] = v
+          }
+          setEnv(merged)
+          setEditingId(stored.editingId)
+        }
+        setDraftReady(true)
+      }
+    })
   }, [userId, setCustomerLabel, setEnv, setEditingId])
 
   const envFingerprint = useMemo(
@@ -66,5 +68,6 @@ export function useDeployBotSessionDraft(
       })
     }, 400)
     return () => window.clearTimeout(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `env` fields are represented by `envFingerprint`
   }, [userId, draftReady, customerLabel, editingId, envFingerprint])
 }

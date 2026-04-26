@@ -1,11 +1,9 @@
 /**
  * WebSocket traffic logger (full raw payloads).
  *
- * Development: batches are POSTed to the Vite dev server, which appends to
- * `websocket-chat-logs.json` at the repo root.
- *
- * Production: register a sink before or early in app startup so entries are
- * persisted or forwarded (browsers cannot write arbitrary paths on disk).
+ * When a production sink is registered (e.g. Supabase `chat_logs`), batches are
+ * sent there first. Otherwise, development POSTs to the Vite dev server for
+ * `websocket-chat-logs.json`; production without a sink only caps memory.
  *
  *   import { registerWsChatLogProductionSink } from '@/lib/websocketChatLog'
  *   registerWsChatLogProductionSink(async (entries) => { ... })
@@ -22,6 +20,17 @@ const buffer: WsChatLogEntry[] = []
 let flushTimer: ReturnType<typeof setTimeout> | null = null
 let productionSink: WsChatLogSink | null = null
 
+/** Current gateway session key for persisted rows (set from chat UI). */
+let sessionKeyGetter: () => string = () => ''
+
+export function setWsChatLogSessionKeyGetter(getter: () => string) {
+  sessionKeyGetter = getter
+}
+
+export function getWsChatLogSessionKey(): string {
+  return sessionKeyGetter()
+}
+
 /** In production, if no sink is registered, keep only this many entries in memory. */
 const PROD_BUFFER_CAP = 5000
 
@@ -37,16 +46,16 @@ export function getWsChatLogProductionSink(): WsChatLogSink | null {
   return productionSink
 }
 
-function shouldNetworkFlush(): boolean {
-  return import.meta.env.DEV
-}
-
 function shouldInvokeSink(): boolean {
   return productionSink !== null
 }
 
+function shouldFlushToDevFile(): boolean {
+  return import.meta.env.DEV && !productionSink
+}
+
 function scheduleFlush() {
-  if (!shouldNetworkFlush() && !shouldInvokeSink()) return
+  if (!shouldFlushToDevFile() && !shouldInvokeSink()) return
   if (flushTimer !== null) return
   flushTimer = window.setTimeout(() => {
     flushTimer = null
@@ -58,14 +67,14 @@ async function flushPersisted() {
   if (!buffer.length) return
   const batch = buffer.splice(0, buffer.length)
   try {
-    if (import.meta.env.DEV) {
+    if (productionSink) {
+      await Promise.resolve(productionSink(batch))
+    } else if (import.meta.env.DEV) {
       await fetch(LOG_ENDPOINT, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ entries: batch }),
       })
-    } else if (productionSink) {
-      await Promise.resolve(productionSink(batch))
     }
   } catch {
     buffer.unshift(...batch)
@@ -97,9 +106,9 @@ export function getWsChatLogBuffer(): readonly WsChatLogEntry[] {
   return buffer
 }
 
-/** Best-effort flush before unload (dev server endpoint only). */
+/** Best-effort flush before unload (Vite dev file endpoint only). */
 export function flushWsChatLogSync() {
-  if (!import.meta.env.DEV || !buffer.length) return
+  if (!import.meta.env.DEV || !buffer.length || productionSink) return
   const batch = buffer.splice(0, buffer.length)
   const payload = JSON.stringify({ entries: batch })
   try {

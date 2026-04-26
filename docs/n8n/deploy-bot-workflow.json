@@ -1,0 +1,434 @@
+{
+  "name": "OpenClaw deploy bot",
+  "meta": {
+    "description": "deploy-bot webhook: small JSON + composeFetchUrl; n8n POSTs deploy-webhook-compose for full YAML (avoids large webhook body). Hostinger Docker API .../virtual-machines/{id}/docker. Set N8N_COMPOSE_FETCH_SECRET in n8n env = Supabase secret. Re-import after changes."
+  },
+  "nodes": [
+    {
+      "id": "webhook-openclaw",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        240,
+        300
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "openclaw-deploy",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "set-env",
+      "name": "Map payload",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        480,
+        300
+      ],
+      "parameters": {
+        "mode": "manual",
+        "duplicateItem": false,
+        "assignments": {
+          "assignments": [
+            {
+              "id": "a1",
+              "name": "botDeploymentId",
+              "value": "={{ $json.body.botDeploymentId ?? $json.botDeploymentId }}",
+              "type": "string"
+            },
+            {
+              "id": "a2",
+              "name": "customerLabel",
+              "value": "={{ $json.body.customerLabel ?? $json.customerLabel }}",
+              "type": "string"
+            },
+            {
+              "id": "a3",
+              "name": "env",
+              "value": "={{ $json.body.env ?? $json.env }}",
+              "type": "object"
+            },
+            {
+              "id": "a4",
+              "name": "updateStackOnly",
+              "value": "={{ $json.body.updateStackOnly ?? $json.updateStackOnly ?? false }}",
+              "type": "boolean"
+            },
+            {
+              "id": "a5",
+              "name": "provider",
+              "value": "={{ $json.body.provider ?? $json.provider ?? {} }}",
+              "type": "object"
+            },
+            {
+              "id": "a6",
+              "name": "infra",
+              "value": "={{ $json.body.infra ?? $json.infra ?? {} }}",
+              "type": "object"
+            },
+            {
+              "id": "a7",
+              "name": "composeFetchUrl",
+              "value": "={{ $json.body.composeFetchUrl ?? $json.composeFetchUrl ?? '' }}",
+              "type": "string"
+            },
+            {
+              "id": "a8",
+              "name": "stackAgent",
+              "value": "={{ $json.body.stackAgent ?? $json.stackAgent ?? {} }}",
+              "type": "object"
+            },
+            {
+              "id": "a9",
+              "name": "assignedUserId",
+              "value": "={{ $json.body.assignedUserId ?? $json.assignedUserId ?? $json.body.userId ?? $json.userId ?? '' }}",
+              "type": "string"
+            },
+            {
+              "id": "a10",
+              "name": "openclawBaseJson",
+              "value": "={{ $json.body.openclawBaseJson ?? $json.openclawBaseJson ?? null }}",
+              "type": "object"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "if-update-stack",
+      "name": "If updateStackOnly",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        840,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "cond-update-stack-only",
+              "leftValue": "={{ $json.updateStackOnly }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "http-fetch-compose",
+      "name": "Fetch stack compose",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        600,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.composeFetchUrl }}",
+        "authentication": "none",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ secret: $env.N8N_COMPOSE_FETCH_SECRET, botDeploymentId: $json.botDeploymentId }) }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "code-merge-compose",
+      "name": "Merge stack compose",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        720,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const mapped = $('Map payload').first().json;\nconst api = $input.first().json;\nconst composeYaml = String(api.composeYaml ?? '').trim();\nif (!composeYaml) {\n  throw new Error(\n    'Empty compose from deploy-webhook-compose: set N8N_COMPOSE_FETCH_SECRET in the n8n environment to match Supabase, and deploy the deploy-webhook-compose Edge Function.',\n  );\n}\nreturn [{ json: { ...mapped, composeYaml } }];\n"
+      }
+    },
+    {
+      "id": "http-vps",
+      "name": "Provision new VPS",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        960,
+        460
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.provider.vpsApiBaseUrl }}",
+        "authentication": "none",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + ($json.provider.vpsApiToken || '') }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ label: $json.customerLabel, deploymentId: $json.botDeploymentId }) }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "code-hostinger-update",
+      "name": "Build Hostinger Docker payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        960,
+        140
+      ],
+      "parameters": {
+        "jsCode": "const hook = $('Webhook').first().json;\nconst mapped = $('Merge stack compose').first().json;\n\nfunction parseWebhookBody(h) {\n  if (!h || h.body == null) return {};\n  if (typeof h.body === 'string') {\n    try {\n      return JSON.parse(h.body);\n    } catch {\n      return {};\n    }\n  }\n  if (typeof h.body === 'object' && !Array.isArray(h.body)) return { ...h.body };\n  return {};\n}\n\nconst wb = parseWebhookBody(hook);\n\nconst mergedEnv =\n  mapped.env &&\n  typeof mapped.env === 'object' &&\n  !Array.isArray(mapped.env) &&\n  Object.keys(mapped.env).length > 0\n    ? mapped.env\n    : wb.env && typeof wb.env === 'object' && !Array.isArray(wb.env)\n      ? wb.env\n      : {};\n\nconst j = {\n  botDeploymentId: mapped.botDeploymentId ?? wb.botDeploymentId,\n  customerLabel: mapped.customerLabel ?? wb.customerLabel,\n  assignedUserId: mapped.assignedUserId ?? wb.assignedUserId,\n  userId: mapped.userId ?? wb.userId,\n  updateStackOnly: mapped.updateStackOnly ?? wb.updateStackOnly ?? false,\n  env: mergedEnv,\n  provider: {\n    ...(typeof wb.provider === 'object' && wb.provider ? wb.provider : {}),\n    ...(typeof mapped.provider === 'object' && mapped.provider ? mapped.provider : {}),\n  },\n  infra: {\n    ...(typeof wb.infra === 'object' && wb.infra ? wb.infra : {}),\n    ...(typeof mapped.infra === 'object' && mapped.infra ? mapped.infra : {}),\n  },\n  composeYaml: String(\n    mapped.composeYaml ??\n      mapped.dockerComposeYaml ??\n      wb.composeYaml ??\n      wb.dockerComposeYaml ??\n      hook.composeYaml ??\n      hook.dockerComposeYaml ??\n      '',\n  ).trim(),\n  openclawBaseJson: mapped.openclawBaseJson ?? wb.openclawBaseJson ?? null,\n};\n\nfunction sanitizeSlug(s) {\n  let t = String(s ?? '')\n    .toLowerCase()\n    .replace(/[^a-z0-9._-]+/g, '-')\n    .replace(/-+/g, '-')\n    .replace(/^-+|-+$/g, '');\n  if (!t) t = 'deployment';\n  if (t.length > 48) t = t.slice(0, 48).replace(/-+$/, '');\n  return t;\n}\n\nfunction formatEnvValue(val) {\n  const str = String(val ?? '');\n  if (/[\\n\\r\"#=\\s]/.test(str)) {\n    return (\n      '\"' +\n      str.replace(/\\\\/g, '\\\\\\\\').replace(/\"/g, '\\\\\"').replace(/\\n/g, '\\\\n') +\n      '\"'\n    );\n  }\n  return str;\n}\n\nconst vmIdRaw = j.infra?.providerVmId;\nif (\n  vmIdRaw === undefined ||\n  vmIdRaw === null ||\n  String(vmIdRaw).trim() === ''\n) {\n  throw new Error(\n    'Missing infra.providerVmId: set Hostinger VM id in bot_deployment_infra (or deploy-bot-callback after provision).',\n  );\n}\n\nconst composeYaml = String(j.composeYaml ?? '').trim();\nif (!composeYaml) {\n  throw new Error(\n    'Missing compose YAML in webhook body: redeploy deploy-bot Edge Function, save Stack template in Supabase, and check body.composeYaml / body.dockerComposeYaml in Webhook output.',\n  );\n}\n\nfunction gatewayUrlToControlUiOrigin(urlRaw) {\n  const u = String(urlRaw ?? '').trim();\n  if (!u) return '';\n  try {\n    const ws = u.replace(/^wss:/i, 'https:').replace(/^ws:/i, 'http:');\n    return new URL(ws).origin;\n  } catch {\n    return '';\n  }\n}\nconst envObj =\n  j.env && typeof j.env === 'object' && !Array.isArray(j.env) ? j.env : {};\nconst _oj = j.openclawBaseJson;\nif (_oj && typeof _oj === 'object' && !Array.isArray(_oj) && Object.keys(_oj).length > 0) {\n  envObj.OPENCLAW_BASE_JSON_B64 = Buffer.from(JSON.stringify(_oj), 'utf8').toString('base64');\n}\nconst _uiOrigin = gatewayUrlToControlUiOrigin(envObj.OPENCLAW_GATEWAY_URL);\nif (_uiOrigin) envObj.OPENCLAW_CONTROL_UI_ORIGIN = _uiOrigin;\nconst lines = [];\nfor (const key of Object.keys(envObj).sort()) {\n  const v = envObj[key];\n  if (v === undefined || v === null) continue;\n  if (typeof v === 'object') continue;\n  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) continue;\n  lines.push(key + '=' + formatEnvValue(v));\n}\nconst environment = lines.join('\\n');\n\nconst userKey = j.assignedUserId ?? j.userId ?? '';\nconst slugPart = sanitizeSlug(\n  String(userKey).trim() || j.customerLabel || j.botDeploymentId,\n);\nconst idSafe = String(j.botDeploymentId)\n  .replace(/[^a-zA-Z0-9-]/g, '')\n  .slice(0, 36);\nconst projectName = 'openclaw-' + slugPart + '__' + idSafe;\n\nlet base = String(j.provider?.vpsApiBaseUrl ?? '').replace(/\\/+$/, '');\nconst vmSufx = '/virtual-machines';\nwhile (base.toLowerCase().endsWith(vmSufx)) {\n  base = base.slice(0, -vmSufx.length).replace(/\\/+$/, '');\n}\nif (!base) {\n  throw new Error(\n    'Missing provider.vpsApiBaseUrl: Hostinger API root (e.g. https://developers.hostinger.com/api/vps/v1), not .../virtual-machines/.',\n  );\n}\nconst token = String(j.provider?.vpsApiToken ?? '').trim();\nif (!token) {\n  throw new Error('Missing provider.vpsApiToken.');\n}\n\nconst dockerApiUrl =\n  base + '/virtual-machines/' + String(vmIdRaw).trim() + '/docker';\n\nreturn [\n  {\n    json: {\n      dockerApiUrl,\n      project_name: projectName,\n      content: composeYaml,\n      environment,\n      bearerToken: token,\n    },\n  },\n];\n"
+      }
+    },
+    {
+      "id": "code-hostinger-after",
+      "name": "Build Hostinger Docker payload (after provision)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        460
+      ],
+      "parameters": {
+        "jsCode": "const hook = $('Webhook').first().json;\nconst mapped = $('Merge stack compose').first().json;\n\nfunction parseWebhookBody(h) {\n  if (!h || h.body == null) return {};\n  if (typeof h.body === 'string') {\n    try {\n      return JSON.parse(h.body);\n    } catch {\n      return {};\n    }\n  }\n  if (typeof h.body === 'object' && !Array.isArray(h.body)) return { ...h.body };\n  return {};\n}\n\nconst wb = parseWebhookBody(hook);\n\nconst mergedEnv =\n  mapped.env &&\n  typeof mapped.env === 'object' &&\n  !Array.isArray(mapped.env) &&\n  Object.keys(mapped.env).length > 0\n    ? mapped.env\n    : wb.env && typeof wb.env === 'object' && !Array.isArray(wb.env)\n      ? wb.env\n      : {};\n\nconst j = {\n  botDeploymentId: mapped.botDeploymentId ?? wb.botDeploymentId,\n  customerLabel: mapped.customerLabel ?? wb.customerLabel,\n  assignedUserId: mapped.assignedUserId ?? wb.assignedUserId,\n  userId: mapped.userId ?? wb.userId,\n  updateStackOnly: mapped.updateStackOnly ?? wb.updateStackOnly ?? false,\n  env: mergedEnv,\n  provider: {\n    ...(typeof wb.provider === 'object' && wb.provider ? wb.provider : {}),\n    ...(typeof mapped.provider === 'object' && mapped.provider ? mapped.provider : {}),\n  },\n  infra: {\n    ...(typeof wb.infra === 'object' && wb.infra ? wb.infra : {}),\n    ...(typeof mapped.infra === 'object' && mapped.infra ? mapped.infra : {}),\n  },\n  composeYaml: String(\n    mapped.composeYaml ??\n      mapped.dockerComposeYaml ??\n      wb.composeYaml ??\n      wb.dockerComposeYaml ??\n      hook.composeYaml ??\n      hook.dockerComposeYaml ??\n      '',\n  ).trim(),\n  openclawBaseJson: mapped.openclawBaseJson ?? wb.openclawBaseJson ?? null,\n};\n\nfunction sanitizeSlug(s) {\n  let t = String(s ?? '')\n    .toLowerCase()\n    .replace(/[^a-z0-9._-]+/g, '-')\n    .replace(/-+/g, '-')\n    .replace(/^-+|-+$/g, '');\n  if (!t) t = 'deployment';\n  if (t.length > 48) t = t.slice(0, 48).replace(/-+$/, '');\n  return t;\n}\n\nfunction formatEnvValue(val) {\n  const str = String(val ?? '');\n  if (/[\\n\\r\"#=\\s]/.test(str)) {\n    return (\n      '\"' +\n      str.replace(/\\\\/g, '\\\\\\\\').replace(/\"/g, '\\\\\"').replace(/\\n/g, '\\\\n') +\n      '\"'\n    );\n  }\n  return str;\n}\n\nconst vmIdRaw = j.infra?.providerVmId;\nif (\n  vmIdRaw === undefined ||\n  vmIdRaw === null ||\n  String(vmIdRaw).trim() === ''\n) {\n  throw new Error(\n    'Missing infra.providerVmId: set Hostinger VM id in bot_deployment_infra (or deploy-bot-callback after provision).',\n  );\n}\n\nconst composeYaml = String(j.composeYaml ?? '').trim();\nif (!composeYaml) {\n  throw new Error(\n    'Missing compose YAML in webhook body: redeploy deploy-bot Edge Function, save Stack template in Supabase, and check body.composeYaml / body.dockerComposeYaml in Webhook output.',\n  );\n}\n\nfunction gatewayUrlToControlUiOrigin(urlRaw) {\n  const u = String(urlRaw ?? '').trim();\n  if (!u) return '';\n  try {\n    const ws = u.replace(/^wss:/i, 'https:').replace(/^ws:/i, 'http:');\n    return new URL(ws).origin;\n  } catch {\n    return '';\n  }\n}\nconst envObj =\n  j.env && typeof j.env === 'object' && !Array.isArray(j.env) ? j.env : {};\nconst _oj = j.openclawBaseJson;\nif (_oj && typeof _oj === 'object' && !Array.isArray(_oj) && Object.keys(_oj).length > 0) {\n  envObj.OPENCLAW_BASE_JSON_B64 = Buffer.from(JSON.stringify(_oj), 'utf8').toString('base64');\n}\nconst _uiOrigin = gatewayUrlToControlUiOrigin(envObj.OPENCLAW_GATEWAY_URL);\nif (_uiOrigin) envObj.OPENCLAW_CONTROL_UI_ORIGIN = _uiOrigin;\nconst lines = [];\nfor (const key of Object.keys(envObj).sort()) {\n  const v = envObj[key];\n  if (v === undefined || v === null) continue;\n  if (typeof v === 'object') continue;\n  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) continue;\n  lines.push(key + '=' + formatEnvValue(v));\n}\nconst environment = lines.join('\\n');\n\nconst userKey = j.assignedUserId ?? j.userId ?? '';\nconst slugPart = sanitizeSlug(\n  String(userKey).trim() || j.customerLabel || j.botDeploymentId,\n);\nconst idSafe = String(j.botDeploymentId)\n  .replace(/[^a-zA-Z0-9-]/g, '')\n  .slice(0, 36);\nconst projectName = 'openclaw-' + slugPart + '__' + idSafe;\n\nlet base = String(j.provider?.vpsApiBaseUrl ?? '').replace(/\\/+$/, '');\nconst vmSufx = '/virtual-machines';\nwhile (base.toLowerCase().endsWith(vmSufx)) {\n  base = base.slice(0, -vmSufx.length).replace(/\\/+$/, '');\n}\nif (!base) {\n  throw new Error(\n    'Missing provider.vpsApiBaseUrl: Hostinger API root (e.g. https://developers.hostinger.com/api/vps/v1), not .../virtual-machines/.',\n  );\n}\nconst token = String(j.provider?.vpsApiToken ?? '').trim();\nif (!token) {\n  throw new Error('Missing provider.vpsApiToken.');\n}\n\nconst dockerApiUrl =\n  base + '/virtual-machines/' + String(vmIdRaw).trim() + '/docker';\n\nreturn [\n  {\n    json: {\n      dockerApiUrl,\n      project_name: projectName,\n      content: composeYaml,\n      environment,\n      bearerToken: token,\n    },\n  },\n];\n"
+      }
+    },
+    {
+      "id": "http-hostinger-docker-update",
+      "name": "Hostinger Docker API (update only)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1200,
+        140
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.dockerApiUrl }}",
+        "authentication": "none",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $json.bearerToken }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ project_name: $json.project_name, content: $json.content, environment: $json.environment }) }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "http-hostinger-docker-after",
+      "name": "Hostinger Docker API (after provision)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1440,
+        460
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.dockerApiUrl }}",
+        "authentication": "none",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $json.bearerToken }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ project_name: $json.project_name, content: $json.content, environment: $json.environment }) }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "respond",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1680,
+        300
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { ok: true } }}",
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Map payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Map payload": {
+      "main": [
+        [
+          {
+            "node": "Fetch stack compose",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch stack compose": {
+      "main": [
+        [
+          {
+            "node": "Merge stack compose",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge stack compose": {
+      "main": [
+        [
+          {
+            "node": "If updateStackOnly",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If updateStackOnly": {
+      "main": [
+        [
+          {
+            "node": "Build Hostinger Docker payload",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Provision new VPS",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Provision new VPS": {
+      "main": [
+        [
+          {
+            "node": "Build Hostinger Docker payload (after provision)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Hostinger Docker payload": {
+      "main": [
+        [
+          {
+            "node": "Hostinger Docker API (update only)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Hostinger Docker payload (after provision)": {
+      "main": [
+        [
+          {
+            "node": "Hostinger Docker API (after provision)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Hostinger Docker API (update only)": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Hostinger Docker API (after provision)": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

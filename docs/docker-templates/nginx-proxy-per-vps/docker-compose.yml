@@ -1,0 +1,20 @@
+# Nginx Proxy Manager — deploy once per VPS.
+# Shared network `bot-bridge` must exist: docker network create bot-bridge
+services:
+  nginx-proxy:
+    image: jc21/nginx-proxy-manager:latest
+    container_name: nginx-proxy
+    restart: always
+    ports:
+      - '80:80'
+      - '81:81'
+      - '443:443'
+    volumes:
+      - ./nginx/data:/data
+      - ./nginx/letsencrypt:/etc/letsencrypt
+    networks:
+      - bot-bridge
+
+networks:
+  bot-bridge:
+    external: true

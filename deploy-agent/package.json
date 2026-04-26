@@ -1,0 +1,17 @@
+{
+  "name": "@openclaw/deploy-agent",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "HTTP deploy agent for VPS: POST /deploy writes .env + docker-compose.yml and runs docker compose.",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "typescript": "~5.9.3"
+  }
+}

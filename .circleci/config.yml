@@ -1,0 +1,102 @@
+# CircleCI: every branch runs lint + build; `main` also deploys the web app `dist/`
+# to a Hostinger VPS over SSH/rsync.
+#
+# Required on main (deploy): Project Settings → Environment Variables (or a Context
+# attached to this project) — set:
+#   VPS_HOST          — VPS hostname or IP 187.124.208.205
+#   VPS_USER          — SSH user (e.g. deploy or root)
+#   VPS_DEPLOY_PATH   — absolute path on the server (e.g. /var/www/openclaw) — rsync
+#                       writes *contents* into this directory (trailing slash on source)
+#   SSH_PRIVATE_KEY   — full private key PEM (multiline); use a dedicated deploy key,
+#                       no passphrase
+# Optional:
+#   VPS_SSH_PORT      — SSH port if not 22
+
+version: 2.1
+
+executors:
+  node-lts:
+    docker:
+      - image: cimg/node:22.14
+    resource_class: medium
+
+jobs:
+  lint-and-build:
+    executor: node-lts
+    steps:
+      - checkout
+      - restore_cache:
+          keys:
+            - v1-npm-root-{{ checksum "package-lock.json" }}
+            - v1-npm-root-
+      - run:
+          name: Install dependencies (web app)
+          command: npm ci
+      - save_cache:
+          key: v1-npm-root-{{ checksum "package-lock.json" }}
+          paths:
+            - node_modules
+      - run:
+          name: Lint
+          command: npm run lint
+      - run:
+          name: Build web app
+          command: npm run build
+      - restore_cache:
+          keys:
+            - v1-npm-deploy-agent-{{ checksum "deploy-agent/package-lock.json" }}
+            - v1-npm-deploy-agent-
+      - run:
+          name: Install and build deploy-agent
+          command: |
+            cd deploy-agent
+            npm ci
+            npm run build
+      - save_cache:
+          key: v1-npm-deploy-agent-{{ checksum "deploy-agent/package-lock.json" }}
+          paths:
+            - deploy-agent/node_modules
+      - persist_to_workspace:
+          root: .
+          paths:
+            - dist
+
+  deploy-vps:
+    executor: node-lts
+    steps:
+      - attach_workspace:
+          at: ~/project
+      - run:
+          name: Install rsync and OpenSSH client
+          command: sudo apt-get update && sudo apt-get install -y rsync openssh-client
+      - run:
+          name: Deploy static build to VPS (rsync over SSH)
+          command: |
+            set -euo pipefail
+            for v in VPS_HOST VPS_USER VPS_DEPLOY_PATH SSH_PRIVATE_KEY; do
+              if [ -z "${!v:-}" ]; then
+                echo "Missing required environment variable: $v"
+                echo "Set it under CircleCI → Project Settings → Environment Variables (or attach a Context)."
+                exit 1
+              fi
+            done
+            mkdir -p ~/.ssh
+            chmod 700 ~/.ssh
+            ssh-keyscan -H "${VPS_HOST}" >> ~/.ssh/known_hosts
+            printf '%s\n' "${SSH_PRIVATE_KEY}" > ~/.ssh/ci_deploy
+            chmod 600 ~/.ssh/ci_deploy
+            PORT="${VPS_SSH_PORT:-22}"
+            RSYNC_RSH="ssh -i ~/.ssh/ci_deploy -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -p ${PORT}"
+            rsync -avz --delete -e "${RSYNC_RSH}" \
+              ./dist/ "${VPS_USER}@${VPS_HOST}:${VPS_DEPLOY_PATH}/"
+
+workflows:
+  build-and-deploy:
+    jobs:
+      - lint-and-build
+      - deploy-vps:
+          requires:
+            - lint-and-build
+          filters:
+            branches:
+              only: main

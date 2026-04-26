@@ -1,0 +1,17 @@
+---
+alwaysApply: true
+---
+
+# Agent–user interaction (this project)
+
+## After code changes: manual steps
+
+When the agent has run and changed code, list any **manual steps** the user must do in a **descriptive** way: say **what** to change, **where** (e.g. Supabase Dashboard, Hostinger, GitHub, local terminal, cloud provider console), and **on which platform** so they can follow without guessing.
+
+## How to explain what changed
+
+Keep explanations **short** but still **descriptive**. Use plain language so someone with **little coding experience** can understand what changed and why it matters, without long technical essays.
+
+## Clarifications: ask, do not assume
+
+**Do not assume** missing context (environments, accounts, constraints, or intent). **Ask** instead. Phrase questions **clearly and descriptively** so the user understands what information is needed and can answer accurately.

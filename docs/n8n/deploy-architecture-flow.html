@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Deploy architecture — app → Supabase → n8n → Hostinger</title>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+    <script>
+      mermaid.initialize({
+        startOnLoad: true,
+        theme: 'neutral',
+        securityLevel: 'loose',
+        flowchart: { htmlLabels: true, useMaxWidth: true, padding: 12 },
+      });
+    </script>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        margin: 0;
+        padding: 1.5rem;
+        background: #f6f7f9;
+        color: #1a1a1a;
+      }
+      h1 {
+        font-size: 1.15rem;
+        font-weight: 600;
+        margin: 0 0 0.5rem;
+      }
+      p {
+        margin: 0 0 1rem;
+        max-width: 52rem;
+        line-height: 1.45;
+        font-size: 0.9rem;
+        color: #444;
+      }
+      .mermaid {
+        background: #fff;
+        border-radius: 8px;
+        padding: 1rem;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Deploy architecture</h1>
+    <p>
+      Superadmin configures data in the app (Postgres). <strong>deploy-bot</strong> Edge reads the DB and
+      POSTs a small payload to <strong>n8n</strong>. n8n fetches compose YAML from
+      <strong>deploy-webhook-compose</strong>. n8n POSTs inline compose + env to <strong>Hostinger</strong>.
+    </p>
+    <pre class="mermaid">flowchart TB
+  subgraph Users["People"]
+    SA["Superadmin user"]
+  end
+
+  subgraph App["Web app"]
+    UI["Deploy / bot UI\n(stack template, provider API,\ndeployments, env)"]
+    Svc["Services / hooks\ncall Edge Functions"]
+  end
+
+  subgraph Supabase["Supabase"]
+    DB[("Postgres\n- bot_deployments\n- bot_deployment_infra\n- deployment_env\n- deploy_compose_template\n- deploy_provider_settings")]
+    EB["Edge: deploy-bot\n(superadmin JWT)\nreads DB, builds payload"]
+    EC["Edge: deploy-webhook-compose\n(shared secret in JSON)\nreads template + deployment id"]
+    EOther["Other edges\ne.g. deploy-bot-callback,\ndeploy-post-openclaw"]
+  end
+
+  subgraph N8N["n8n"]
+    WH["Webhook\nreceives JSON from deploy-bot"]
+    MAP["Map payload\nbotDeploymentId, env,\ncomposeFetchUrl, provider, infra…"]
+    FETCH["HTTP POST\ncomposeFetchUrl\nbody: secret + botDeploymentId"]
+    MERGE["Merge composeYaml\ninto item"]
+    BUILD["Code: build Hostinger body\nproject_name, content, environment"]
+    HAPI["HTTP POST Hostinger\n…/virtual-machines/{id}/docker"]
+  end
+
+  subgraph Hostinger["Hostinger VPS API"]
+    VPS["Docker project API\nreceives inline YAML + env string"]
+    VM[("VM runs stack")]
+  end
+
+  SA --> UI
+  UI --> DB
+  UI --> Svc
+  Svc -->|"HTTPS + auth"| EB
+  EB --> DB
+  EB -->|"POST small JSON\n(composeFetchUrl, env, …)"| WH
+  WH --> MAP --> FETCH
+  FETCH -->|"HTTPS"| EC
+  EC --> DB
+  EC -->|"JSON { composeYaml }"| MERGE
+  MERGE --> BUILD --> HAPI
+  HAPI --> VPS --> VM
+
+  VM -.->|"optional callbacks / post-deploy"| EOther
+  EOther -.-> DB</pre>
+  </body>
+</html>

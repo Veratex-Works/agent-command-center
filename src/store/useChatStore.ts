@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import type { ChatMessage, Config, ConnectionStatus, SystemVariant } from '@/types'
+import { getDefaultSessionKeyForUser } from '@/lib/sessionKey'
 import { loadConfig, saveConfig } from '@/lib/storage'
 
 interface ChatStore {
@@ -33,6 +34,14 @@ interface ChatStore {
   /** Last gateway `heartbeat` event (not shown in chat). */
   heartbeatIndicator: { at: number; ok: boolean; reason?: string; status?: string } | null
   setHeartbeatIndicator: (v: ChatStore['heartbeatIndicator']) => void
+
+  /** Sign-out: clear persisted gateway + messages (same browser, next login must not inherit). */
+  clearChatForLogout: () => void
+  /**
+   * New signed-in user (or first mount): disconnect is handled by ChatPage; this clears overlap
+   * and optionally strips gateway credentials so unassigned users do not use another account's URL.
+   */
+  bootstrapChatForSignedInUser: (userId: string, clearGateway: boolean) => void
 }
 
 let msgCounter = 0
@@ -40,7 +49,7 @@ const nextId = () => `msg-${++msgCounter}`
 
 const initialConfig = loadConfig()
 
-export const useChatStore = create<ChatStore>((set) => ({
+export const useChatStore = create<ChatStore>((set, get) => ({
   config: initialConfig,
   setConfig: (config) => {
     saveConfig(config)
@@ -90,4 +99,49 @@ export const useChatStore = create<ChatStore>((set) => ({
 
   heartbeatIndicator: null,
   setHeartbeatIndicator: (heartbeatIndicator) => set({ heartbeatIndicator }),
+
+  clearChatForLogout: () => {
+    saveConfig({ url: '', token: '', sessionKey: '' })
+    set({
+      config: { url: '', token: '', sessionKey: '' },
+      messages: [],
+      isRunning: false,
+      isTyping: false,
+      heartbeatIndicator: null,
+      connectionStatus: 'disconnected',
+      statusText: 'disconnected',
+      showConnectPrompt: true,
+    })
+  },
+
+  bootstrapChatForSignedInUser: (userId, clearGateway) => {
+    const sk = getDefaultSessionKeyForUser(userId)
+    const prev = get().config
+    if (clearGateway) {
+      saveConfig({ url: '', token: '', sessionKey: sk })
+      set({
+        messages: [],
+        isRunning: false,
+        isTyping: false,
+        heartbeatIndicator: null,
+        connectionStatus: 'disconnected',
+        statusText: 'disconnected',
+        showConnectPrompt: true,
+        config: { url: '', token: '', sessionKey: sk },
+      })
+      return
+    }
+    const next: Config = { ...prev, sessionKey: sk }
+    saveConfig(next)
+    set({
+      messages: [],
+      isRunning: false,
+      isTyping: false,
+      heartbeatIndicator: null,
+      connectionStatus: 'disconnected',
+      statusText: 'disconnected',
+      showConnectPrompt: !next.url?.trim(),
+      config: next,
+    })
+  },
 }))

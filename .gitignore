@@ -9,6 +9,12 @@ pnpm-debug.log*
 lerna-debug.log*
 
 node_modules
+
+# Local secrets (Supabase URL/keys, DB passwords)
+.env
+.env.*
+!.env.example
+
 dist
 dist-ssr
 *.local

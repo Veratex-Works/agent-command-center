@@ -14,11 +14,39 @@ function runMerge() {
   const target = '/work/openclaw.json'
   const uid = 1000
   const gid = 1000
+  /** Recursive chown for UID/GID 1000. Symlinks use lchown (no follow); broken symlink targets never throw. */
   function chownR(p) {
-    fs.chownSync(p, uid, gid)
-    const st = fs.statSync(p)
+    let st
+    try {
+      st = fs.lstatSync(p)
+    } catch (e) {
+      if (e && (e.code === 'ENOENT' || e.code === 'ENOTDIR')) return
+      throw e
+    }
+    if (st.isSymbolicLink()) {
+      try {
+        fs.lchownSync(p, uid, gid)
+      } catch (e) {
+        if (e && e.code === 'ENOENT') return
+        throw e
+      }
+      return
+    }
+    try {
+      fs.chownSync(p, uid, gid)
+    } catch (e) {
+      if (e && e.code === 'ENOENT') return
+      throw e
+    }
     if (!st.isDirectory()) return
-    for (const ent of fs.readdirSync(p, { withFileTypes: true })) {
+    let entries
+    try {
+      entries = fs.readdirSync(p, { withFileTypes: true })
+    } catch (e) {
+      if (e && (e.code === 'ENOENT' || e.code === 'ENOTDIR')) return
+      throw e
+    }
+    for (const ent of entries) {
       chownR(path.join(p, ent.name))
     }
   }

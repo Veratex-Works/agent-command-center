@@ -102,8 +102,8 @@ jobs:
               ./dist/ "${VPS_USER}@${VPS_HOST}:${VPS_DEPLOY_PATH}/"
 
       - run:
-    name: Check Key Format
-    command: head -n 1 ~/.ssh/ci_deploy && tail -n 1 ~/.ssh/ci_deploy
+          name: Check Key Format
+          command: head -n 1 ~/.ssh/ci_deploy && tail -n 1 ~/.ssh/ci_deploy
 
 workflows:
   build-and-deploy:

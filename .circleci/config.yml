@@ -1,15 +1,3 @@
-# CircleCI: every branch runs lint + build; `main` also deploys the web app `dist/`
-# to a Hostinger VPS over SSH/rsync.
-#
-# Required on main (deploy): Project Settings → Environment Variables 
-#   VPS_HOST          — 187.124.208.205
-#   VPS_USER          — SSH user (e.g. root)
-#   VPS_DEPLOY_PATH   — /var/www/openclaw
-#   SSH_PRIVATE_KEY   — The FULL contents of your id_rsa_circleci file 
-#                       (Must start with -----BEGIN RSA PRIVATE KEY-----)
-# Optional:
-#   VPS_SSH_PORT      — Default is 22
-
 version: 2.1
 
 executors:
@@ -76,34 +64,34 @@ jobs:
             # 1. Validate Environment Variables
             for v in VPS_HOST VPS_USER VPS_DEPLOY_PATH SSH_PRIVATE_KEY; do
               if [ -z "${!v:-}" ]; then
-                echo "Error: $v is not set in CircleCI Environment Variables."
+                echo "Error: $v is not set in CircleCI settings."
                 exit 1
               fi
             done
 
-            # 2. Setup SSH directory and Key
+            # 2. Setup SSH directory
             mkdir -p ~/.ssh
             chmod 700 ~/.ssh
             
-            # Using echo with quotes preserves the multiline RSA PEM format correctly
-            echo "${SSH_PRIVATE_KEY}" > ~/.ssh/ci_deploy
+            # 3. Decode the Base64 key into a file
+            # This reconstructs the PEM file perfectly on the runner
+            echo "${SSH_PRIVATE_KEY}" | base64 -d > ~/.ssh/ci_deploy
             chmod 600 ~/.ssh/ci_deploy
             
-            # 3. Add VPS to known_hosts to prevent interactive prompts
+            # 4. Verification Check
+            echo "Key header check:"
+            head -n 1 ~/.ssh/ci_deploy
+            
+            # 5. Add VPS to known_hosts to prevent hangs
             ssh-keyscan -H "${VPS_HOST}" >> ~/.ssh/known_hosts
             
-            # 4. Run rsync
-            # We use -o IdentitiesOnly=yes to ensure it uses the specific key we just created
+            # 6. Run rsync
             PORT="${VPS_SSH_PORT:-22}"
-            RSYNC_RSH="ssh -p ${PORT} -i ~/.ssh/ci_deploy -o IdentitiesOnly=yes"
+            RSYNC_RSH="ssh -p ${PORT} -i ~/.ssh/ci_deploy -o IdentitiesOnly=yes -o StrictHostKeyChecking=no"
             
-            echo "Starting rsync to ${VPS_HOST}..."
+            echo "Starting rsync transfer..."
             rsync -avz --delete -e "${RSYNC_RSH}" \
               ./dist/ "${VPS_USER}@${VPS_HOST}:${VPS_DEPLOY_PATH}/"
-
-      - run:
-          name: Check Key Format
-          command: head -n 1 ~/.ssh/ci_deploy && tail -n 1 ~/.ssh/ci_deploy
 
 workflows:
   build-and-deploy:

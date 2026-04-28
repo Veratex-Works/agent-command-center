@@ -108,7 +108,6 @@ function runMerge() {
     ...(Array.isArray(cuiIn.allowedOrigins) ? cuiIn.allowedOrigins : []),
     'http://127.0.0.1:18789',
     'http://localhost:18789',
-    'https://bot.demo-nelkode.co.za',
     'http://localhost:5173',
     O,
   ])

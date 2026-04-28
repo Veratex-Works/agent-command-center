@@ -1,5 +1,67 @@
-deploy-vps:
+# CircleCI: every branch runs lint + build; `main` also deploys the web app `dist/`
+# to a Hostinger VPS over SSH/rsync.
+#
+# Required on main (deploy): Project Settings → Environment Variables 
+#   VPS_HOST          — 187.124.208.205
+#   VPS_USER          — SSH user (e.g. root)
+#   VPS_DEPLOY_PATH   — /var/www/openclaw
+#   SSH_PRIVATE_KEY   — The FULL contents of your id_rsa_circleci file 
+#                       (Must start with -----BEGIN RSA PRIVATE KEY-----)
+# Optional:
+#   VPS_SSH_PORT      — Default is 22
+
+version: 2.1
+
+executors:
+  node-lts:
+    docker:
+      - image: cimg/node:22.14
+    resource_class: medium
+
+jobs:
+  lint-and-build:
     executor: node-lts
+    steps:
+      - checkout
+      - restore_cache:
+          keys:
+            - v1-npm-root-{{ checksum "package-lock.json" }}
+            - v1-npm-root-
+      - run:
+          name: Install dependencies (web app)
+          command: npm ci
+      - save_cache:
+          key: v1-npm-root-{{ checksum "package-lock.json" }}
+          paths:
+            - node_modules
+      - run:
+          name: Lint
+          command: npm run lint
+      - run:
+          name: Build web app
+          command: npm run build
+      - restore_cache:
+          keys:
+            - v1-npm-deploy-agent-{{ checksum "deploy-agent/package-lock.json" }}
+            - v1-npm-deploy-agent-
+      - run:
+          name: Install and build deploy-agent
+          command: |
+            cd deploy-agent
+            npm ci
+            npm run build
+      - save_cache:
+          key: v1-npm-deploy-agent-{{ checksum "deploy-agent/package-lock.json" }}
+          paths:
+            - deploy-agent/node_modules
+      - persist_to_workspace:
+          root: .
+          paths:
+            - dist
+
+  deploy-vps:
+    executor: node-lts
+    working_directory: ~/project
     steps:
       - attach_workspace:
           at: ~/project
@@ -10,28 +72,42 @@ deploy-vps:
           name: Deploy static build to VPS (rsync over SSH)
           command: |
             set -euo pipefail
-            
-            # 1. Validation
+
+            # 1. Validate Environment Variables
             for v in VPS_HOST VPS_USER VPS_DEPLOY_PATH SSH_PRIVATE_KEY; do
               if [ -z "${!v:-}" ]; then
-                echo "Missing required environment variable: $v"
+                echo "Error: $v is not set in CircleCI Environment Variables."
                 exit 1
               fi
             done
 
-            # 2. Setup SSH directory
+            # 2. Setup SSH directory and Key
             mkdir -p ~/.ssh
             chmod 700 ~/.ssh
             
-            # 3. Create the key file (IMPORTANT: Use quotes around the variable)
+            # Using echo with quotes preserves the multiline RSA PEM format correctly
             echo "${SSH_PRIVATE_KEY}" > ~/.ssh/ci_deploy
             chmod 600 ~/.ssh/ci_deploy
             
-            # 4. Add VPS to known hosts
+            # 3. Add VPS to known_hosts to prevent interactive prompts
             ssh-keyscan -H "${VPS_HOST}" >> ~/.ssh/known_hosts
             
-            # 5. Execute rsync
+            # 4. Run rsync
+            # We use -o IdentitiesOnly=yes to ensure it uses the specific key we just created
             PORT="${VPS_SSH_PORT:-22}"
-            rsync -avz --delete \
-              -e "ssh -i ~/.ssh/ci_deploy -o IdentitiesOnly=yes -p ${PORT}" \
+            RSYNC_RSH="ssh -p ${PORT} -i ~/.ssh/ci_deploy -o IdentitiesOnly=yes"
+            
+            echo "Starting rsync to ${VPS_HOST}..."
+            rsync -avz --delete -e "${RSYNC_RSH}" \
               ./dist/ "${VPS_USER}@${VPS_HOST}:${VPS_DEPLOY_PATH}/"
+
+workflows:
+  build-and-deploy:
+    jobs:
+      - lint-and-build
+      - deploy-vps:
+          requires:
+            - lint-and-build
+          filters:
+            branches:
+              only: main

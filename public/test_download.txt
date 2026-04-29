@@ -1,0 +1,1 @@
+OpenClaw outbound plain-text file test.

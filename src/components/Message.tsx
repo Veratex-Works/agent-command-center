@@ -1,8 +1,14 @@
-import { createContext, useContext } from 'react'
+import { createContext, useContext, useMemo } from 'react'
 import type { Components } from 'react-markdown'
+import { File } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import type { ChatMessage } from '@/types'
+import { formatBytes } from '@/lib/chatAttachments'
+import {
+  extractMediaDirectivesFromMarkdown,
+  type ParsedMediaDirective,
+} from '@/lib/parseMediaAttachedInBody'
+import type { ChatArtifact, ChatMessage } from '@/types'
 
 interface MessageProps {
   message: ChatMessage
@@ -75,8 +81,134 @@ function markdownComponents(isUser: boolean): Components {
   }
 }
 
+function OutboundAttachmentList({ items }: { items: NonNullable<ChatMessage['attachments']> }) {
+  return (
+    <ul className="mt-2 mb-0 pl-0 list-none flex flex-col gap-1 text-[11px] font-mono text-dim">
+      {items.map((a, i) => (
+        <li key={`${a.name}-${i}-${a.size}`} className="flex flex-wrap gap-x-2 gap-y-0">
+          <span className="text-accent2/90 truncate max-w-[220px]" title={a.name}>
+            {a.name}
+          </span>
+          <span>{formatBytes(a.size)}</span>
+          <span className="opacity-70">{a.mimeType}</span>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+function downloadFromArtifact(a: ChatArtifact) {
+  const label = (a.name || 'download').replace(/[/\\]/g, '-')
+  if (!a.dataBase64) return
+  try {
+    const bin = atob(a.dataBase64)
+    const bytes = new Uint8Array(bin.length)
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
+    const blob = new Blob([bytes], { type: a.mimeType || 'application/octet-stream' })
+    const url = URL.createObjectURL(blob)
+    const el = document.createElement('a')
+    el.href = url
+    el.download = label
+    el.rel = 'noopener'
+    el.click()
+    URL.revokeObjectURL(url)
+  } catch {
+    /* binary too large or invalid base64 in some engines */
+  }
+}
+
+function GatewayMediaChips({
+  directives,
+  isUser,
+  withTopMargin,
+}: {
+  directives: ParsedMediaDirective[]
+  isUser: boolean
+  withTopMargin: boolean
+}) {
+  const chipClass = isUser
+    ? 'border-user-border bg-[rgba(0,0,0,0.15)] text-accent2'
+    : 'border-border bg-surface2 text-content'
+
+  return (
+    <div className={`flex flex-col gap-1.5 ${withTopMargin ? 'mt-2' : ''}`} aria-label="Gateway-staged files">
+      {directives.map((d) => (
+        <div
+          key={d.uri}
+          className={`flex items-start gap-2 rounded-lg border px-2.5 py-2 text-left ${chipClass}`}
+        >
+          <File size={16} className="flex-shrink-0 mt-0.5 opacity-80" strokeWidth={2} />
+          <div className="min-w-0 flex-1">
+            <div className="font-mono text-[12px] font-medium truncate" title={d.label}>
+              {d.label}
+            </div>
+            <div className="text-[10px] text-dim leading-snug mt-0.5">
+              Gateway staging for the agent — <code className="text-[10px]">media://</code> is not a browser link.
+              If the agent cannot read it, check OpenClaw workspace / tool policy on the server.
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function MessageArtifacts({ artifacts, isUser }: { artifacts: ChatArtifact[]; isUser: boolean }) {
+  const linkClass = isUser
+    ? 'text-accent underline-offset-2 hover:underline break-all text-xs font-sans'
+    : 'text-accent2 underline-offset-2 hover:underline break-all text-xs font-sans'
+
+  return (
+    <div className="mt-2 flex flex-col gap-3 border-t border-border/50 pt-2 first:mt-0 first:border-t-0 first:pt-0">
+      {artifacts.map((a) => {
+        const label = a.name || (a.kind === 'image' ? 'Image' : 'File')
+        const canBlobDownload = Boolean(a.dataBase64)
+        const showThumb =
+          a.kind === 'image' &&
+          a.dataBase64 &&
+          (a.mimeType?.startsWith('image/') ?? false)
+
+        return (
+          <div key={a.id} className="flex flex-col gap-1.5">
+            {showThumb && a.mimeType ? (
+              <img
+                src={`data:${a.mimeType};base64,${a.dataBase64}`}
+                alt=""
+                className="max-h-44 max-w-full rounded-md border border-border object-contain"
+              />
+            ) : null}
+            <div className="flex flex-wrap items-center gap-2 text-[11px] font-mono text-dim">
+              <span className="truncate max-w-[240px] text-content" title={label}>
+                {label}
+              </span>
+              {a.mimeType ? <span className="opacity-80">{a.mimeType}</span> : null}
+              {a.href ? (
+                <a href={a.href} className={linkClass} target="_blank" rel="noopener noreferrer">
+                  Open
+                </a>
+              ) : null}
+              {canBlobDownload ? (
+                <button
+                  type="button"
+                  className={`${linkClass} bg-transparent border-none cursor-pointer p-0 font-sans`}
+                  onClick={() => downloadFromArtifact(a)}
+                >
+                  Download
+                </button>
+              ) : null}
+              {!a.href && !canBlobDownload ? (
+                <span className="italic opacity-70">Preview not available in chat</span>
+              ) : null}
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 export function Message({ message }: MessageProps) {
-  const { type, content, ts, variant, streaming } = message
+  const { type, content, ts, variant, streaming, attachments, artifacts, renderAsPre } = message
 
   if (type === 'system') {
     const variantClass =
@@ -100,6 +232,16 @@ export function Message({ message }: MessageProps) {
   const isUser = type === 'user'
   const isBot = type === 'bot'
   const usePlainWhileStreaming = isBot && streaming
+  const { strippedMarkdown, directives } = useMemo(
+    () =>
+      renderAsPre || usePlainWhileStreaming
+        ? { strippedMarkdown: content, directives: [] as ParsedMediaDirective[] }
+        : extractMediaDirectivesFromMarkdown(content),
+    [content, usePlainWhileStreaming, renderAsPre],
+  )
+  const showMarkdownBody = strippedMarkdown.trim().length > 0
+  /** OpenClaw echoes `[media attached: media://…]` into transcript text; show chips only on assistant bubbles so user rows stay "your file" metadata only. */
+  const showGatewayMediaChips = directives.length > 0 && !isUser
   const bubbleClass = `px-[15px] py-[11px] rounded-[12px] text-sm leading-[1.65] break-words ${
     isUser
       ? 'bg-user-bubble border border-user-border rounded-br-[3px] text-accent2'
@@ -120,10 +262,37 @@ export function Message({ message }: MessageProps) {
       <div className={bubbleClass}>
         {usePlainWhileStreaming ? (
           <span className="whitespace-pre-wrap">{content}</span>
-        ) : (
-          <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents(isUser)}>
+        ) : renderAsPre ? (
+          <pre className="m-0 max-h-[min(70vh,520px)] overflow-auto whitespace-pre-wrap break-words text-[11px] leading-relaxed font-mono text-content">
             {content}
-          </ReactMarkdown>
+          </pre>
+        ) : (
+          <>
+            {showMarkdownBody ? (
+              <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents(isUser)}>
+                {strippedMarkdown}
+              </ReactMarkdown>
+            ) : null}
+            {showGatewayMediaChips ? (
+              <GatewayMediaChips
+                directives={directives}
+                isUser={isUser}
+                withTopMargin={showMarkdownBody}
+              />
+            ) : null}
+            {!showMarkdownBody &&
+            !showGatewayMediaChips &&
+            !attachments?.length &&
+            !artifacts?.length ? (
+              <span className="text-dim text-xs italic">Empty message</span>
+            ) : null}
+            {attachments && attachments.length > 0 ? (
+              <OutboundAttachmentList items={attachments} />
+            ) : null}
+            {artifacts && artifacts.length > 0 ? (
+              <MessageArtifacts artifacts={artifacts} isUser={isUser} />
+            ) : null}
+          </>
         )}
       </div>
     </div>

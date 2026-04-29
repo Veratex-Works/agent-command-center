@@ -5,7 +5,6 @@
  */
 import http from 'node:http'
 import fs from 'node:fs'
-import path from 'node:path'
 
 const PORT = Number(process.env.STACK_HOOK_PORT || 18790)
 const token = String(process.env.STACK_AGENT_BEARER_TOKEN || '').trim()
@@ -14,42 +13,6 @@ function runMerge() {
   const target = '/work/openclaw.json'
   const uid = 1000
   const gid = 1000
-  /** Recursive chown for UID/GID 1000. Symlinks use lchown (no follow); broken symlink targets never throw. */
-  function chownR(p) {
-    let st
-    try {
-      st = fs.lstatSync(p)
-    } catch (e) {
-      if (e && (e.code === 'ENOENT' || e.code === 'ENOTDIR')) return
-      throw e
-    }
-    if (st.isSymbolicLink()) {
-      try {
-        fs.lchownSync(p, uid, gid)
-      } catch (e) {
-        if (e && e.code === 'ENOENT') return
-        throw e
-      }
-      return
-    }
-    try {
-      fs.chownSync(p, uid, gid)
-    } catch (e) {
-      if (e && e.code === 'ENOENT') return
-      throw e
-    }
-    if (!st.isDirectory()) return
-    let entries
-    try {
-      entries = fs.readdirSync(p, { withFileTypes: true })
-    } catch (e) {
-      if (e && (e.code === 'ENOENT' || e.code === 'ENOTDIR')) return
-      throw e
-    }
-    for (const ent of entries) {
-      chownR(path.join(p, ent.name))
-    }
-  }
   function expandTrustAddrs(list) {
     const s = new Set()
     const ipv4 = /^\d{1,3}(?:\.\d{1,3}){3}$/
@@ -154,7 +117,9 @@ function runMerge() {
   fs.writeFileSync(tmp, JSON.stringify(out) + '\n')
   fs.renameSync(tmp, target)
   fs.chownSync(target, uid, gid)
-  chownR('/work')
+  // Do not chown -R /work here: OpenClaw mutates plugin-runtime-deps concurrently; recursive
+  // chown races and can ENOENT on paths like dist/.buildstamp. openclaw-workspace-init already
+  // chowns the bind mount; post-deploy only needs the merged JSON owned by UID 1000.
 }
 
 const server = http.createServer((req, res) => {

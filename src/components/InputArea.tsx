@@ -81,7 +81,9 @@ export function InputArea({ onSend, onAbort }: InputAreaProps) {
     })
   }, [])
 
-  addFilesRef.current = addFiles
+  useLayoutEffect(() => {
+    addFilesRef.current = addFiles
+  }, [addFiles])
 
   const removePending = useCallback((id: string) => {
     setPendingFiles((prev) => {
@@ -92,7 +94,9 @@ export function InputArea({ onSend, onAbort }: InputAreaProps) {
   }, [])
 
   const pendingRef = useRef(pendingFiles)
-  pendingRef.current = pendingFiles
+  useLayoutEffect(() => {
+    pendingRef.current = pendingFiles
+  }, [pendingFiles])
   useEffect(() => {
     return () => {
       pendingRef.current.forEach((p) => {

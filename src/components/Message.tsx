@@ -210,6 +210,17 @@ function MessageArtifacts({ artifacts, isUser }: { artifacts: ChatArtifact[]; is
 export function Message({ message }: MessageProps) {
   const { type, content, ts, variant, streaming, attachments, artifacts, renderAsPre } = message
 
+  const isUser = type === 'user'
+  const isBot = type === 'bot'
+  const usePlainWhileStreaming = isBot && streaming
+  const { strippedMarkdown, directives } = useMemo(
+    () =>
+      type === 'system' || renderAsPre || usePlainWhileStreaming
+        ? { strippedMarkdown: content, directives: [] as ParsedMediaDirective[] }
+        : extractMediaDirectivesFromMarkdown(content),
+    [content, type, usePlainWhileStreaming, renderAsPre],
+  )
+
   if (type === 'system') {
     const variantClass =
       variant === 'warn'
@@ -228,17 +239,6 @@ export function Message({ message }: MessageProps) {
       </div>
     )
   }
-
-  const isUser = type === 'user'
-  const isBot = type === 'bot'
-  const usePlainWhileStreaming = isBot && streaming
-  const { strippedMarkdown, directives } = useMemo(
-    () =>
-      renderAsPre || usePlainWhileStreaming
-        ? { strippedMarkdown: content, directives: [] as ParsedMediaDirective[] }
-        : extractMediaDirectivesFromMarkdown(content),
-    [content, usePlainWhileStreaming, renderAsPre],
-  )
   const showMarkdownBody = strippedMarkdown.trim().length > 0
   /** OpenClaw echoes `[media attached: media://…]` into transcript text; show chips only on assistant bubbles so user rows stay "your file" metadata only. */
   const showGatewayMediaChips = directives.length > 0 && !isUser

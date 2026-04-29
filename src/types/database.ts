@@ -102,6 +102,8 @@ export interface BotDeploymentInfra {
   provider_vm_id: string | null
   vps_public_ipv4: string | null
   agent_base_url: string | null
+  /** Set by deploy pipeline (e.g. deploy-bot-callback) for NPM upstream hostname. */
+  openclaw_bot_container_name: string | null
   last_deployed_at: string | null
   last_provisioned_at: string | null
   updated_at: string

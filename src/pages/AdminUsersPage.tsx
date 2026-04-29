@@ -1,18 +1,20 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { ArrowLeft, Users } from 'lucide-react'
+import { ArrowLeft, Check, Copy, Users } from 'lucide-react'
 import { useAuth } from '@/hooks/useAuth'
 import {
   deleteAuthUserAccount,
   listProfilesForAdmin,
   updateProfileRole,
+  type AdminProfileRow,
 } from '@/services/adminUsers'
 import type { Profile } from '@/types/database'
 
 export function AdminUsersPage() {
   const { user } = useAuth()
   const myId = user?.id
-  const [rows, setRows] = useState<Profile[]>([])
+  const [rows, setRows] = useState<AdminProfileRow[]>([])
+  const [copiedUserId, setCopiedUserId] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [listError, setListError] = useState<string | null>(null)
   const [banner, setBanner] = useState<string | null>(null)
@@ -34,7 +36,20 @@ export function AdminUsersPage() {
 
   const superadminCount = rows.filter((r) => r.role === 'superadmin').length
 
-  const handleRoleChange = async (row: Profile, nextRole: Profile['role']) => {
+  const copyOpenclawContainerName = async (userId: string, text: string) => {
+    setListError(null)
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopiedUserId(userId)
+      window.setTimeout(() => {
+        setCopiedUserId((id) => (id === userId ? null : id))
+      }, 2000)
+    } catch {
+      setListError('Could not copy to clipboard (browser may block clipboard on non-HTTPS).')
+    }
+  }
+
+  const handleRoleChange = async (row: AdminProfileRow, nextRole: Profile['role']) => {
     if (row.role === nextRole) return
     if (row.role === 'superadmin' && nextRole === 'user' && superadminCount <= 1) {
       setBanner(null)
@@ -54,7 +69,7 @@ export function AdminUsersPage() {
     void refresh()
   }
 
-  const handleDelete = async (row: Profile) => {
+  const handleDelete = async (row: AdminProfileRow) => {
     if (!myId || row.id === myId) return
     const label = row.email?.trim() || row.id
     if (
@@ -128,12 +143,13 @@ export function AdminUsersPage() {
       ) : rows.length === 0 ? (
         <p className="text-muted text-sm m-0">No profiles found.</p>
       ) : (
-        <div className="border border-border rounded-2xl overflow-hidden max-w-4xl">
-          <table className="w-full text-left text-sm border-collapse">
+        <div className="border border-border rounded-2xl overflow-x-auto max-w-5xl">
+          <table className="w-full text-left text-sm border-collapse min-w-[44rem]">
             <thead>
               <tr className="bg-surface2 border-b border-border">
                 <th className="p-3 font-semibold text-muted">Email</th>
                 <th className="p-3 font-semibold text-muted">Role</th>
+                <th className="p-3 font-semibold text-muted">Assigned bot</th>
                 <th className="p-3 font-semibold text-muted">Created</th>
                 <th className="p-3 font-semibold text-muted">Actions</th>
               </tr>
@@ -168,6 +184,37 @@ export function AdminUsersPage() {
                         <option value="user">user</option>
                         <option value="superadmin">superadmin</option>
                       </select>
+                    </td>
+                    <td className="p-3 align-top">
+                      {!row.hasAssignedBot ? (
+                        <span className="text-dim">—</span>
+                      ) : !row.openclaw_bot_container_name ? (
+                        <span className="text-dim text-[11px] leading-snug block max-w-[14rem]">
+                          Yes · not recorded yet (have n8n POST{' '}
+                          <code className="text-[10px]">openclawBotContainerName</code> to deploy-bot-callback).
+                        </span>
+                      ) : (
+                        <div className="flex flex-col gap-1.5 max-w-[min(20rem,85vw)]">
+                          <code className="text-[11px] font-mono text-content break-all leading-snug">
+                            {row.openclaw_bot_container_name}
+                          </code>
+                          <button
+                            type="button"
+                            disabled={busyId !== null}
+                            onClick={() =>
+                              void copyOpenclawContainerName(row.id, row.openclaw_bot_container_name!)
+                            }
+                            className="inline-flex items-center gap-1.5 self-start text-[11px] font-semibold text-accent hover:underline disabled:opacity-50"
+                          >
+                            {copiedUserId === row.id ? (
+                              <Check size={14} aria-hidden />
+                            ) : (
+                              <Copy size={14} aria-hidden />
+                            )}
+                            {copiedUserId === row.id ? 'Copied' : 'Copy name'}
+                          </button>
+                        </div>
+                      )}
                     </td>
                     <td className="p-3 text-dim text-[11px] font-mono align-top whitespace-nowrap">
                       {new Date(row.created_at).toLocaleString()}

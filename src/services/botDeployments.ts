@@ -30,6 +30,7 @@ function parseInfraEmbed(
     provider_vm_id: (row.provider_vm_id as string | null) ?? null,
     vps_public_ipv4: (row.vps_public_ipv4 as string | null) ?? null,
     agent_base_url: (row.agent_base_url as string | null) ?? null,
+    openclaw_bot_container_name: (row.openclaw_bot_container_name as string | null) ?? null,
     last_deployed_at: (row.last_deployed_at as string | null) ?? null,
     last_provisioned_at: (row.last_provisioned_at as string | null) ?? null,
     updated_at: row.updated_at as string,
@@ -73,6 +74,7 @@ export async function listBotDeployments(): Promise<ListBotDeploymentsResult> {
         provider_vm_id,
         vps_public_ipv4,
         agent_base_url,
+        openclaw_bot_container_name,
         last_deployed_at,
         last_provisioned_at,
         updated_at

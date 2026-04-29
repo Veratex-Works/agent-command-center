@@ -6,14 +6,56 @@ import {
 import { supabase } from '@/lib/supabase'
 import type { Profile } from '@/types/database'
 
-export async function listProfilesForAdmin(): Promise<{ rows: Profile[]; error: string | null }> {
+/** Superadmin users table: profile plus optional assigned bot container name from infra. */
+export type AdminProfileRow = Profile & {
+  hasAssignedBot: boolean
+  /** From deploy pipeline (`deploy-bot-callback`); null if not recorded yet or no bot. */
+  openclaw_bot_container_name: string | null
+}
+
+export async function listProfilesForAdmin(): Promise<{
+  rows: AdminProfileRow[]
+  error: string | null
+}> {
   if (!supabase) return { rows: [], error: 'Supabase is not configured.' }
-  const { data, error } = await supabase
-    .from('profiles')
-    .select('id, email, role, created_at, updated_at')
-    .order('created_at', { ascending: false })
-  if (error) return { rows: [], error: error.message }
-  return { rows: (data ?? []) as Profile[], error: null }
+  const [{ data: profiles, error: profErr }, { data: bots, error: botErr }] = await Promise.all([
+    supabase
+      .from('profiles')
+      .select('id, email, role, created_at, updated_at')
+      .order('created_at', { ascending: false }),
+    supabase
+      .from('bot_deployments')
+      .select('assigned_user_id, bot_deployment_infra ( openclaw_bot_container_name )')
+      .not('assigned_user_id', 'is', null),
+  ])
+  if (profErr) return { rows: [], error: profErr.message }
+  if (botErr) return { rows: [], error: botErr.message }
+
+  const containerByUserId = new Map<string, string | null>()
+  for (const row of bots ?? []) {
+    const uid = (row as { assigned_user_id?: string }).assigned_user_id
+    if (!uid) continue
+    const rawInfra = (row as { bot_deployment_infra?: unknown }).bot_deployment_infra
+    const embed = Array.isArray(rawInfra) ? rawInfra[0] : rawInfra
+    const rawName =
+      embed && typeof embed === 'object'
+        ? (embed as { openclaw_bot_container_name?: string | null }).openclaw_bot_container_name
+        : null
+    const name = typeof rawName === 'string' && rawName.trim() ? rawName.trim() : null
+    containerByUserId.set(uid, name)
+  }
+
+  const rows: AdminProfileRow[] = (profiles ?? []).map((p) => {
+    const id = (p as Profile).id
+    const hasAssignedBot = containerByUserId.has(id)
+    return {
+      ...(p as Profile),
+      hasAssignedBot,
+      openclaw_bot_container_name: hasAssignedBot ? (containerByUserId.get(id) ?? null) : null,
+    }
+  })
+
+  return { rows, error: null }
 }
 
 export async function updateProfileRole(

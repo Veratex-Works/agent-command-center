@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from 'react'
+import { getDebugRawAssistant, setDebugRawAssistant } from '@/lib/debugRawAssistant'
 import { X } from 'lucide-react'
 import { useAuth } from '@/hooks/useAuth'
 import { useChatStore } from '@/store/useChatStore'
@@ -36,6 +37,7 @@ function SettingsFormBody({
   const [token, setToken] = useState(config.token)
   const [sessionKey, setSessionKey] = useState(config.sessionKey)
   const [showToken, setShowToken] = useState(false)
+  const [rawAssistantDebug, setRawAssistantDebug] = useState(() => getDebugRawAssistant())
 
   const handleClose = () => setSettingsOpen(false)
 
@@ -62,6 +64,31 @@ function SettingsFormBody({
             {config.sessionKey.trim() || derivedSessionKey || '—'}
           </div>
         </div>
+        <label className="flex items-start gap-2.5 cursor-pointer text-sm text-muted leading-snug">
+          <input
+            type="checkbox"
+            checked={rawAssistantDebug}
+            onChange={(e) => {
+              const on = e.target.checked
+              setRawAssistantDebug(on)
+              setDebugRawAssistant(on)
+              useChatStore
+                .getState()
+                .addSystemMessage(
+                  on
+                    ? 'Raw assistant debug on. Reconnect the gateway (settings or refresh) to reload history as JSON.'
+                    : 'Raw assistant debug off.',
+                  'ok',
+                )
+            }}
+            className="mt-1"
+          />
+          <span>
+            <strong className="text-content">Debug: raw assistant payloads</strong> — show JSON from{' '}
+            <code className="text-[11px]">chat.history</code> / <code className="text-[11px]">chat</code> /{' '}
+            <code className="text-[11px]">agent</code> events instead of cleaned markdown. Turn off when finished.
+          </span>
+        </label>
         <div className="flex justify-end">
           <button
             type="button"
@@ -169,6 +196,31 @@ function SettingsFormBody({
           </div>
         )}
       </div>
+
+      <label className="flex items-start gap-2.5 cursor-pointer text-sm text-muted leading-snug">
+        <input
+          type="checkbox"
+          checked={rawAssistantDebug}
+          onChange={(e) => {
+            const on = e.target.checked
+            setRawAssistantDebug(on)
+            setDebugRawAssistant(on)
+            useChatStore
+              .getState()
+              .addSystemMessage(
+                on
+                  ? 'Raw assistant debug on. Save & Reconnect to reload history as JSON.'
+                  : 'Raw assistant debug off.',
+                'ok',
+              )
+          }}
+          className="mt-1"
+        />
+        <span>
+          <strong className="text-content">Debug: raw assistant payloads</strong> — JSON from gateway events
+          instead of cleaned chat text (large / noisy). Disable after debugging.
+        </span>
+      </label>
 
       <div className="flex gap-2.5 justify-end">
         <button

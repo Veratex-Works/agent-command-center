@@ -3,6 +3,25 @@ export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'er
 export type MessageType = 'user' | 'bot' | 'system'
 export type SystemVariant = 'warn' | 'ok' | ''
 
+/** Shown on user bubbles — metadata only (no file bytes in memory). */
+export interface ChatOutboundMeta {
+  name: string
+  mimeType: string
+  size: number
+}
+
+/** Parsed from assistant `content` blocks (URLs, inline base64, etc.). */
+export interface ChatArtifact {
+  id: string
+  kind: 'image' | 'file'
+  name?: string
+  mimeType?: string
+  /** Remote URL the browser can open or download. */
+  href?: string
+  /** Raw base64 payload (no `data:` prefix) for local Blob download. */
+  dataBase64?: string
+}
+
 export interface ChatMessage {
   id: string
   type: MessageType
@@ -10,6 +29,16 @@ export interface ChatMessage {
   ts?: string
   variant?: SystemVariant
   streaming?: boolean
+  /** When true, render `content` in a `<pre>` (e.g. raw JSON debug for assistant). */
+  renderAsPre?: boolean
+  attachments?: ChatOutboundMeta[]
+  artifacts?: ChatArtifact[]
+}
+
+/** Composer → WebSocket `chat.send`. */
+export interface ChatSendPayload {
+  text: string
+  files: File[]
 }
 
 export interface Config {
@@ -48,6 +77,8 @@ export interface GatewayPayload {
     type?: string
     nonce?: string
     auth?: { deviceToken?: string }
+    /** `hello-ok.policy` */
+    policy?: { maxPayload?: number; maxBufferedBytes?: number; tickIntervalMs?: number }
     requestId?: string
     // chat.history (legacy)
     entries?: HistoryEntry[]

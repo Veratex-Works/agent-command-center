@@ -14,6 +14,26 @@ export type WsChatLogEntry = {
   data: unknown
 }
 
+/** Strip large base64 from outbound `chat.send` before dev file / Supabase sinks. */
+export function sanitizeWsChatLogData(data: unknown): unknown {
+  if (!data || typeof data !== 'object') return data
+  const d = data as Record<string, unknown>
+  if (d.type !== 'req' || d.method !== 'chat.send') return data
+  const params = d.params
+  if (!params || typeof params !== 'object') return data
+  const p = { ...(params as Record<string, unknown>) }
+  if (!Array.isArray(p.attachments)) return { ...d, params: p }
+  p.attachments = p.attachments.map((att) => {
+    if (!att || typeof att !== 'object') return att
+    const o = { ...(att as Record<string, unknown>) }
+    if (typeof o.content === 'string' && o.content.length > 96) {
+      o.content = `[redacted base64 ${o.content.length} chars]`
+    }
+    return o
+  })
+  return { ...d, params: p }
+}
+
 export type WsChatLogSink = (entries: readonly WsChatLogEntry[]) => void | Promise<void>
 
 const buffer: WsChatLogEntry[] = []
@@ -86,7 +106,7 @@ export function logWsChat(direction: 'in' | 'out', data: unknown) {
   const entry: WsChatLogEntry = {
     t: new Date().toISOString(),
     direction,
-    data,
+    data: sanitizeWsChatLogData(data),
   }
   buffer.push(entry)
 

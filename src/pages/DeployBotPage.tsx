@@ -27,6 +27,9 @@ import {
 } from '@/types/database'
 import type { Profile } from '@/types/database'
 
+/** Set to true when the "Update stack only" option is ready for superadmins. */
+const SHOW_UPDATE_STACK_ONLY_UI = false
+
 function emptyEnv(): DeploymentEnv {
   return Object.fromEntries(DEPLOYMENT_ENV_KEYS.map((k) => [k, ''])) as DeploymentEnv
 }
@@ -457,24 +460,26 @@ export function DeployBotPage() {
 
       <DeployStackTemplateSection onSaved={() => void refresh()} />
 
-      <div className="flex flex-col gap-2 max-w-3xl">
-        <label className="flex items-start gap-2.5 text-sm text-muted cursor-pointer select-none">
-          <input
-            type="checkbox"
-            className="mt-0.5 rounded border-border"
-            checked={updateStackOnly}
-            onChange={(e) => setUpdateStackOnly(e.target.checked)}
-          />
-          <span>
-            <span className="font-semibold text-content">Update stack only</span>
-            <span className="block text-[12px] text-dim mt-0.5">
-              Skip creating a new VPS; n8n should redeploy on the existing host using{' '}
-              <code className="text-[11px]">agentBaseUrl</code> or <code className="text-[11px]">vpsPublicIpv4</code>{' '}
-              from the table below (filled after first provision via callback).
+      {SHOW_UPDATE_STACK_ONLY_UI && (
+        <div className="flex flex-col gap-2 max-w-3xl">
+          <label className="flex items-start gap-2.5 text-sm text-muted cursor-pointer select-none">
+            <input
+              type="checkbox"
+              className="mt-0.5 rounded border-border"
+              checked={updateStackOnly}
+              onChange={(e) => setUpdateStackOnly(e.target.checked)}
+            />
+            <span>
+              <span className="font-semibold text-content">Update stack only</span>
+              <span className="block text-[12px] text-dim mt-0.5">
+                Skip creating a new VPS; n8n should redeploy on the existing host using{' '}
+                <code className="text-[11px]">agentBaseUrl</code> or <code className="text-[11px]">vpsPublicIpv4</code>{' '}
+                from the table below (filled after first provision via callback).
+              </span>
             </span>
-          </span>
-        </label>
-      </div>
+          </label>
+        </div>
+      )}
 
       <div ref={deployInvokeStatusRef} className="flex flex-col gap-2 max-w-3xl scroll-mt-4">
       {banner && (

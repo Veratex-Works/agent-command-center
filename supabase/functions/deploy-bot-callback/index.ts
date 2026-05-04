@@ -8,6 +8,8 @@ type CallbackBody = {
   providerVmId?: string | null
   vpsPublicIpv4?: string | null
   agentBaseUrl?: string | null
+  /** Full Docker container_name of the openclaw gateway service (from pipeline, e.g. docker compose ps). */
+  openclawBotContainerName?: string | null
   deploymentStatus?: string
   /** When true, set last_deployed_at to now() */
   touchLastDeployed?: boolean
@@ -110,6 +112,11 @@ Deno.serve(async (req) => {
         }
       }
       infraPatch.agent_base_url = ab
+    }
+    if (body.openclawBotContainerName !== undefined) {
+      const raw = body.openclawBotContainerName
+      const trimmed = typeof raw === 'string' ? raw.trim() : ''
+      infraPatch.openclaw_bot_container_name = trimmed ? trimmed.slice(0, 256) : null
     }
     if (body.touchLastDeployed === true) {
       infraPatch.last_deployed_at = now

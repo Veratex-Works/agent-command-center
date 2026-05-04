@@ -3,7 +3,17 @@ import { useChatStore } from '@/store/useChatStore'
 import { getDeviceIdentity, signChallenge } from '@/lib/crypto'
 import { saveDeviceToken } from '@/lib/storage'
 import { logWsChat, logWsChatRawIn } from '@/lib/websocketChatLog'
-import type { Config, GatewayPayload, HistoryEntry, HistoryMessage } from '@/types'
+import {
+  assertFileWithinAttachmentLimit,
+  estimateChatSendJsonBytes,
+  fileToOpenClawAttachment,
+  OPENCLAW_CHAT_ATTACHMENT_MAX_BYTES,
+  OPENCLAW_DEFAULT_WS_MAX_PAYLOAD_BYTES,
+  type OpenClawChatAttachmentWire,
+} from '@/lib/chatAttachments'
+import { extractArtifactsFromChatPayload, extractArtifactsFromHistoryMessage } from '@/lib/chatContentArtifacts'
+import { getDebugRawAssistant, safeStringify } from '@/lib/debugRawAssistant'
+import type { ChatSendPayload, Config, GatewayPayload, HistoryEntry, HistoryMessage } from '@/types'
 
 const LEGACY_DEFAULT_SESSION_KEY = 'agent:main:webchat:direct:user1'
 
@@ -289,6 +299,7 @@ export function useWebSocket(getFallbackSessionKey?: () => string | undefined) {
   const chatFinalPendingRunIdRef = useRef<string | null>(null)
   /** Last cumulative assistant text when the gateway does not emit the chat lane. */
   const agentOnlyBufferRef = useRef<string>('')
+  const gatewayMaxPayloadRef = useRef<number>(OPENCLAW_DEFAULT_WS_MAX_PAYLOAD_BYTES)
 
   const store = useChatStore
 
@@ -363,15 +374,34 @@ export function useWebSocket(getFallbackSessionKey?: () => string | undefined) {
         const isAssistantLike = msg.role === 'assistant' || msg.role === 'model'
         if (!isUser && !isAssistantLike) return
 
-        const text = extractVisibleTextFromHistoryMessage(msg)
-        if (!text) return
-        if (isAssistantLike && isHeartbeatAckText(text)) return
-
-        const role = isUser ? 'user' : 'bot'
         const ts = msg.timestamp
           ? new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
           : undefined
-        store.getState().addMessage({ type: role, content: text, ts })
+
+        if (isAssistantLike && getDebugRawAssistant()) {
+          const raw = safeStringify(msg)
+          if (!raw.trim()) return
+          store.getState().addMessage({
+            type: 'bot',
+            content: raw,
+            ts,
+            renderAsPre: true,
+          })
+          return
+        }
+
+        const text = extractVisibleTextFromHistoryMessage(msg)
+        const artifacts = extractArtifactsFromHistoryMessage(msg)
+        if (!text && artifacts.length === 0) return
+        if (isAssistantLike && text && isHeartbeatAckText(text) && artifacts.length === 0) return
+
+        const role = isUser ? 'user' : 'bot'
+        store.getState().addMessage({
+          type: role,
+          content: text,
+          ts,
+          ...(artifacts.length ? { artifacts } : {}),
+        })
       })
     },
     [store],
@@ -430,8 +460,9 @@ export function useWebSocket(getFallbackSessionKey?: () => string | undefined) {
         return
       }
 
-      if (state === 'final' || state === 'aborted' || state === 'error') {
+        if (state === 'final' || state === 'aborted' || state === 'error') {
         const text = extractAssistantTextFromChatPayload(payload)
+        const artifacts = extractArtifactsFromChatPayload(payload)
         chatFinalPendingRunIdRef.current = null
         agentOnlyBufferRef.current = ''
         streamingIdRef.current = null
@@ -439,15 +470,32 @@ export function useWebSocket(getFallbackSessionKey?: () => string | undefined) {
         store.getState().setTyping(false)
         store.getState().setRunning(false)
 
-        if (isHeartbeatAckText(text)) return
+        if (text && isHeartbeatAckText(text) && artifacts.length === 0 && !getDebugRawAssistant()) return
 
-        if (text) {
+        if (getDebugRawAssistant()) {
           const tsFromMsg = message?.timestamp
           const ts =
             typeof tsFromMsg === 'number'
               ? new Date(tsFromMsg).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
               : undefined
-          store.getState().addMessage({ type: 'bot', content: text, ts })
+          store.getState().addMessage({
+            type: 'bot',
+            content: safeStringify(payload as unknown),
+            ts,
+            renderAsPre: true,
+          })
+        } else if (text || artifacts.length > 0) {
+          const tsFromMsg = message?.timestamp
+          const ts =
+            typeof tsFromMsg === 'number'
+              ? new Date(tsFromMsg).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+              : undefined
+          store.getState().addMessage({
+            type: 'bot',
+            content: text,
+            ts,
+            ...(artifacts.length ? { artifacts } : {}),
+          })
         } else {
           const cfg = config
           fetchHistory(cfg)
@@ -482,7 +530,24 @@ export function useWebSocket(getFallbackSessionKey?: () => string | undefined) {
         store.getState().setTyping(false)
         store.getState().setRunning(false)
 
-        if (buf && !isHeartbeatAckText(buf)) {
+        if (getDebugRawAssistant()) {
+          const ts = data.endedAt
+            ? new Date(data.endedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+            : undefined
+          store.getState().addMessage({
+            type: 'bot',
+            content: safeStringify({
+              stream: 'lifecycle',
+              phase: data.phase,
+              endedAt: data.endedAt,
+              buffer: buf,
+              runId,
+              sessionKey: payload.sessionKey,
+            }),
+            ts,
+            renderAsPre: true,
+          })
+        } else if (buf && !isHeartbeatAckText(buf)) {
           const ts = data.endedAt
             ? new Date(data.endedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
             : undefined
@@ -505,7 +570,19 @@ export function useWebSocket(getFallbackSessionKey?: () => string | undefined) {
           streamingTextRef.current = ''
           store.getState().setTyping(false)
           store.getState().setRunning(false)
-          if (finalText && !isHeartbeatAckText(finalText)) {
+          if (getDebugRawAssistant()) {
+            store.getState().addMessage({
+              type: 'bot',
+              content: safeStringify({
+                stream: 'assistant',
+                runId,
+                sessionKey: payload.sessionKey,
+                data,
+                mergedText: finalText,
+              }),
+              renderAsPre: true,
+            })
+          } else if (finalText && !isHeartbeatAckText(finalText)) {
             store.getState().addMessage({ type: 'bot', content: finalText })
           }
         }
@@ -560,6 +637,12 @@ export function useWebSocket(getFallbackSessionKey?: () => string | undefined) {
 
       // hello-ok — connected
       if (msg.type === 'res' && msg.ok && msg.payload?.type === 'hello-ok') {
+        const maxP = msg.payload?.policy?.maxPayload
+        if (typeof maxP === 'number' && maxP > 0) {
+          gatewayMaxPayloadRef.current = maxP
+        } else {
+          gatewayMaxPayloadRef.current = OPENCLAW_DEFAULT_WS_MAX_PAYLOAD_BYTES
+        }
         if (msg.payload?.auth?.deviceToken) {
           saveDeviceToken(config.url, msg.payload.auth.deviceToken)
         }
@@ -733,9 +816,11 @@ export function useWebSocket(getFallbackSessionKey?: () => string | undefined) {
   }, [store, handleMessage, stopStreaming])
 
   const sendMessage = useCallback(
-    (text: string) => {
+    async (payload: ChatSendPayload) => {
+      const { text, files } = payload
+      const trimmed = text.trim()
       const { isRunning, config } = store.getState()
-      if (!text.trim() || isRunning) return
+      if ((!trimmed && files.length === 0) || isRunning) return
 
       const ws = wsRef.current
       if (!ws || ws.readyState !== WebSocket.OPEN) {
@@ -743,8 +828,47 @@ export function useWebSocket(getFallbackSessionKey?: () => string | undefined) {
         return
       }
 
+      let attachmentsWire: OpenClawChatAttachmentWire[] | undefined
+      try {
+        for (const f of files) {
+          assertFileWithinAttachmentLimit(f, OPENCLAW_CHAT_ATTACHMENT_MAX_BYTES)
+        }
+        if (files.length > 0) {
+          attachmentsWire = await Promise.all(files.map((f) => fileToOpenClawAttachment(f)))
+          const est = estimateChatSendJsonBytes(trimmed, attachmentsWire)
+          const cap = gatewayMaxPayloadRef.current
+          if (est > cap * 0.92) {
+            store
+              .getState()
+              .addSystemMessage(
+                `Attachments exceed the gateway frame budget (~${Math.floor(cap / (1024 * 1024))} MiB). Try fewer or smaller files.`,
+                'warn',
+              )
+            return
+          }
+        }
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e)
+        store.getState().addSystemMessage(msg, 'warn')
+        return
+      }
+
       const ts = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-      store.getState().addMessage({ type: 'user', content: text, ts })
+      const outboundMeta =
+        files.length > 0
+          ? files.map((f) => ({
+              name: f.name,
+              mimeType: f.type?.trim() || 'application/octet-stream',
+              size: f.size,
+            }))
+          : undefined
+
+      store.getState().addMessage({
+        type: 'user',
+        content: trimmed,
+        ts,
+        ...(outboundMeta ? { attachments: outboundMeta } : {}),
+      })
       store.getState().setTyping(true)
       store.getState().setRunning(true)
       streamingIdRef.current = null
@@ -759,7 +883,12 @@ export function useWebSocket(getFallbackSessionKey?: () => string | undefined) {
         type: 'req',
         method: 'chat.send',
         id: idempotencyKey,
-        params: { message: text, idempotencyKey, sessionKey: key },
+        params: {
+          message: trimmed,
+          idempotencyKey,
+          sessionKey: key,
+          ...(attachmentsWire?.length ? { attachments: attachmentsWire } : {}),
+        },
       })
     },
     [store, sendRaw, resolveSessionKey],
